@@ -93,6 +93,24 @@ No accounts. No downloads. No "please update your app." Just comms.
 
 ---
 
+## How It Actually Works (Non-Nerd Version)
+
+Imagine a group phone call, but everyone's phone talks directly to everyone else's phone — no middleman, no server recording your conversations, no company listening in.
+
+1. **You open the website.** The app loads entirely in your browser. Nothing to install.
+
+2. **Host creates a room.** They get a 6-letter code (like `X7KP2Q`).
+
+3. **Everyone else enters that code.** Their browsers find each other through the internet and establish direct connections.
+
+4. **Your voice goes straight to your teammates.** When you talk, your audio travels directly from your device to theirs. It doesn't go through our servers — we don't even *have* audio servers.
+
+5. **The host assigns people to channels.** Like putting people into different radio frequencies. Your squad hears your squad. Leadership has their own line.
+
+That's it. It's like walkie-talkies, but through your browser, and they actually work through walls. And across the planet.
+
+---
+
 ## Technical Stuff (For Nerds)
 
 - **WebRTC** peer-to-peer audio via PeerJS
