@@ -98,14 +98,15 @@
       useEffect(() => { channelStatesRef.current = channelStates; }, [channelStates]);
 
       // Check if currently speaking on any channel
-      const isSpeaking = Object.values(channelStates).some(s => s.speak) && !globalMute;
+      const isSpeaking = !globalMute && Object.values(channelStates).some(s => s.speak);
       
       // Get channels I'm speaking to
-      const getSpeakingChannels = () => {
+      const getSpeakingChannels = useCallback(() => {
+        if (globalMute) return [];
         return Object.entries(channelStates)
           .filter(([_, state]) => state.speak)
           .map(([id, _]) => id === COMMAND_NET_ID ? COMMAND_NET_ID : parseInt(id));
-      };
+      }, [channelStates, globalMute]);
 
       const colorOptions = [
         '#00ff66', '#ffcc00', '#ff6b6b', '#4ecdc4', '#a855f7', 
@@ -152,18 +153,36 @@
           let shouldHear = false;
           
           // Check if we should hear this user based on their speaking channels and our listening channels
-          if (user.speaking && user.speakingChannels) {
-            user.speakingChannels.forEach(speakingCh => {
-              const chState = channelStatesRef.current[speakingCh];
+          if (user.speaking && user.speakingChannels && user.speakingChannels.length > 0) {
+            for (const speakingCh of user.speakingChannels) {
+              const chKey = String(speakingCh);
+              const chState = channelStatesRef.current[speakingCh] || channelStatesRef.current[chKey];
               if (chState?.listen) {
                 shouldHear = true;
+                break;
               }
-            });
+            }
           }
           
-          gainNode.gain.value = (shouldHear && !globalMute) ? 1 : 0;
+          // Get volume for the channel (use first matching channel's volume)
+          let volume = 0.8;
+          if (shouldHear && user.speakingChannels) {
+            for (const ch of user.speakingChannels) {
+              if (ch === COMMAND_NET_ID) {
+                volume = commandNetVolume / 100;
+                break;
+              }
+              const team = teamsRef.current.find(t => t.id === ch);
+              if (team) {
+                volume = team.volume / 100;
+                break;
+              }
+            }
+          }
+          
+          gainNode.gain.value = (shouldHear && !globalMute) ? volume : 0;
         });
-      }, [globalMute]);
+      }, [globalMute, commandNetVolume]);
 
       useEffect(() => {
         updateAudioRouting();
@@ -193,9 +212,10 @@
 
       useEffect(() => {
         if (sessionState !== 'lobby') {
-          broadcastSpeakingState(getSpeakingChannels());
+          const channels = getSpeakingChannels();
+          broadcastSpeakingState(channels);
         }
-      }, [channelStates, sessionState, globalMute]);
+      }, [channelStates, sessionState, globalMute, getSpeakingChannels, broadcastSpeakingState]);
 
       // Toggle channel listen/speak
       const toggleChannelListen = (channelId) => {
@@ -407,7 +427,11 @@
 
       useEffect(() => {
         if (localStreamRef.current) {
-          localStreamRef.current.getAudioTracks().forEach(track => { track.enabled = isSpeaking; });
+          const tracks = localStreamRef.current.getAudioTracks();
+          tracks.forEach(track => { 
+            track.enabled = isSpeaking;
+            console.log('Mic track enabled:', isSpeaking);
+          });
         }
       }, [isSpeaking]);
 
@@ -455,8 +479,8 @@
                 peerId: data.peerId, 
                 username: data.username, 
                 status: data.status || 'standby', 
-                speaking: false,
-                speakingChannels: [],
+                speaking: data.speaking || false,
+                speakingChannels: data.speakingChannels || [],
                 channelId: data.channelId || null,
                 role: data.role || 'operator',
                 isHost: data.isHost || false
@@ -469,17 +493,25 @@
             const conn = connectionsRef.current.get(fromPeerId)?.conn;
             if (conn?.open) {
               const defaultChannel = teamsRef.current.length > 0 ? teamsRef.current[0].id : null;
+              const newUser = { 
+                peerId: data.peerId, 
+                username: data.username, 
+                status: data.status || 'standby',
+                speaking: false,
+                speakingChannels: [],
+                channelId: defaultChannel,
+                role: 'operator',
+                isHost: false
+              };
+              const allUsers = [...connectedUsersRef.current.filter(u => u.peerId !== data.peerId), newUser];
               conn.send({
                 type: 'sync-state',
                 teams: teamsRef.current,
-                users: [...connectedUsersRef.current, { 
-                  peerId: data.peerId, 
-                  username: data.username, 
-                  status: data.status || 'standby',
-                  channelId: defaultChannel,
-                  role: 'operator',
-                  isHost: false
-                }].map(u => u.peerId === data.peerId ? { ...u, channelId: defaultChannel } : u),
+                users: allUsers.map(u => ({
+                  ...u,
+                  speaking: u.speaking || false,
+                  speakingChannels: u.speakingChannels || []
+                })),
                 yourChannelId: defaultChannel,
                 yourRole: 'operator'
               });
@@ -491,6 +523,8 @@
                   peerId: data.peerId, 
                   username: data.username, 
                   status: data.status || 'standby',
+                  speaking: false,
+                  speakingChannels: [],
                   channelId: teamsRef.current.length > 0 ? teamsRef.current[0].id : null,
                   role: 'operator',
                   isHost: false
@@ -500,7 +534,15 @@
           }
         } else if (data.type === 'sync-state') {
           setTeams(data.teams);
-          setConnectedUsers(data.users);
+          // Ensure all users have required fields
+          const usersWithDefaults = data.users.map(u => ({
+            ...u,
+            speaking: u.speaking || false,
+            speakingChannels: u.speakingChannels || [],
+            status: u.status || 'standby',
+            role: u.role || 'operator'
+          }));
+          setConnectedUsers(usersWithDefaults);
           setMyChannelId(data.yourChannelId);
           setMyRole(data.yourRole || 'operator');
           // Set up initial channel states
@@ -676,12 +718,13 @@
       const copyCode = () => navigator.clipboard.writeText(sessionCode);
 
       useEffect(() => {
+        const speakingChannels = getSpeakingChannels();
         setConnectedUsers(prev => prev.map(u => 
           u.peerId === peerRef.current?.id 
-            ? { ...u, status: myStatus, speaking: isSpeaking, speakingChannels: getSpeakingChannels() } 
+            ? { ...u, status: myStatus, speaking: isSpeaking, speakingChannels: speakingChannels } 
             : u
         ));
-      }, [myStatus, isSpeaking, channelStates]);
+      }, [myStatus, isSpeaking, getSpeakingChannels]);
 
       // Drag and drop
       const handleDragStart = (e, user) => { if (isHostRef.current) setDraggedUser(user); };
