@@ -2,6 +2,10 @@
 
 ### *When Discord is too casual and actual radios are too expensive*
 
+<p align="center">
+  <i>A <a href="https://scrivener.pro">Scrivener.pro</a> Production</i>
+</p>
+
 ---
 
 ## What Is This?
@@ -182,7 +186,9 @@ Built with:
 - [PeerJS](https://peerjs.com/) — WebRTC made less painful  
 - [React](https://react.dev/) — You know what React is
 - [JetBrains Mono](https://www.jetbrains.com/lp/mono/) — Pretty monospace font
-- Questionable decisions — Me
+- Coffee and questionable late-night decisions
+
+Created by **[Scrivener.pro](https://scrivener.pro)**
 
 ---
 
@@ -193,6 +199,16 @@ MIT. Do whatever you want. Build cool things.
 ---
 
 <p align="center">
+  <b>G-COMMS</b> is a <a href="https://scrivener.pro">Scrivener.pro</a> project
+  <br><br>
+  <a href="https://scrivener.pro">🌐 scrivener.pro</a>
+  <br><br>
+  <i>If G-COMMS saved your op, your airsoft team, or just made you feel like a tactical badass for an afternoon — consider buying me a coffee.</i>
+  <br><br>
+  <a href="https://scrivener.pro">☕ Support the Project</a>
+  <br><br>
+  ---
+  <br><br>
   <i>"COMMS UP"</i>
   <br><br>
   📡
