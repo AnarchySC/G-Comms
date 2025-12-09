@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>G-COMMS | GBRS Communications System v.0.9.3</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
@@ -11,21 +13,52 @@
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { 
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { 
       font-family: 'JetBrains Mono', 'Fira Code', monospace;
       background: linear-gradient(135deg, #0a0f0a 0%, #1a1f1a 50%, #0f1a0f 100%);
       min-height: 100vh;
+      min-height: -webkit-fill-available;
       color: #e0ffe0;
+      overflow-x: hidden;
+      touch-action: manipulation;
     }
     ::placeholder { color: #4a6a4a; }
+    input, button { font-size: 16px !important; } /* Prevent iOS zoom */
+    button { 
+      cursor: pointer; 
+      -webkit-touch-callout: none;
+      touch-action: manipulation;
+    }
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 24px;
+      background: transparent;
+    }
+    input[type="range"]::-webkit-slider-runnable-track {
+      height: 8px;
+      border-radius: 4px;
+    }
     input[type="range"]::-webkit-slider-thumb {
-      appearance: none; width: 14px; height: 14px; border-radius: 50%;
-      background: #e0ffe0; cursor: pointer; box-shadow: 0 0 10px rgba(0,255,100,0.5);
+      -webkit-appearance: none;
+      appearance: none;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #e0ffe0;
+      cursor: pointer;
+      box-shadow: 0 0 10px rgba(0,255,100,0.5);
+      margin-top: -8px;
     }
     input[type="range"]::-moz-range-thumb {
-      width: 14px; height: 14px; border-radius: 50%; background: #e0ffe0;
-      cursor: pointer; border: none; box-shadow: 0 0 10px rgba(0,255,100,0.5);
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #e0ffe0;
+      cursor: pointer;
+      border: none;
+      box-shadow: 0 0 10px rgba(0,255,100,0.5);
     }
     @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.7; transform: scale(1.1); } }
     @keyframes glow { 0%, 100% { box-shadow: 0 0 20px rgba(0,255,100,0.2); } 50% { box-shadow: 0 0 30px rgba(0,255,100,0.4); } }
@@ -35,6 +68,14 @@
     .user-chip:active { cursor: grabbing; }
     .channel-drop-zone { transition: all 0.2s; }
     .channel-drop-zone.drag-over { background: rgba(0,255,100,0.1); border-color: rgba(0,255,100,0.5) !important; }
+    
+    /* Mobile-specific styles */
+    @media (max-width: 768px) {
+      .desktop-only { display: none !important; }
+    }
+    @media (min-width: 769px) {
+      .mobile-only { display: none !important; }
+    }
   </style>
 </head>
 <body>
@@ -44,6 +85,9 @@
     const { useState, useRef, useEffect, useCallback, useMemo } = React;
 
     const COMMAND_NET_ID = 'command-net';
+    
+    // Detect mobile
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768;
 
     const VoIPApp = () => {
       const [sessionState, setSessionState] = useState('lobby');
@@ -75,6 +119,7 @@
       const [draggedUser, setDraggedUser] = useState(null);
       const [commandNetVolume, setCommandNetVolume] = useState(80);
       const [allCallActive, setAllCallActive] = useState(false);
+      const [selectedUserForAssign, setSelectedUserForAssign] = useState(null); // Mobile: tap user then tap channel
       
       const peerRef = useRef(null);
       const connectionsRef = useRef(new Map());
@@ -819,64 +864,76 @@
         const channelColor = isCommandNet ? '#ff6b6b' : channel.color;
         const channelName = isCommandNet ? 'COMMAND NET' : channel.name;
         
+        const handleChannelTap = () => {
+          if (isMobile && selectedUserForAssign && !isCommandNet && myRole === 'commander') {
+            moveUserToChannel(selectedUserForAssign.peerId, channel.id);
+            setSelectedUserForAssign(null);
+          }
+        };
+        
         return (
           <div
-            className={!isCommandNet ? "channel-drop-zone" : ""}
-            onDragOver={!isCommandNet ? handleDragOver : undefined}
-            onDragEnter={!isCommandNet ? handleDragEnter : undefined}
-            onDragLeave={!isCommandNet ? handleDragLeave : undefined}
-            onDrop={!isCommandNet ? (e) => handleDrop(e, channel.id) : undefined}
+            className={!isCommandNet && !isMobile ? "channel-drop-zone" : ""}
+            onDragOver={!isCommandNet && !isMobile ? handleDragOver : undefined}
+            onDragEnter={!isCommandNet && !isMobile ? handleDragEnter : undefined}
+            onDragLeave={!isCommandNet && !isMobile ? handleDragLeave : undefined}
+            onDrop={!isCommandNet && !isMobile ? (e) => handleDrop(e, channel.id) : undefined}
+            onClick={handleChannelTap}
             style={{ 
               background: isCommandNet 
                 ? 'linear-gradient(135deg, rgba(40,15,15,0.9), rgba(50,20,20,0.9))' 
                 : 'linear-gradient(135deg, rgba(10,30,10,0.9), rgba(20,40,20,0.9))', 
-              border: `2px solid ${channelState.speak ? channelColor : channelState.listen ? `${channelColor}66` : 'rgba(255,255,255,0.15)'}`,
+              border: `2px solid ${selectedUserForAssign && !isCommandNet ? '#00ff66' : channelState.speak ? channelColor : channelState.listen ? `${channelColor}66` : 'rgba(255,255,255,0.15)'}`,
               borderRadius: '12px', 
-              padding: '18px',
+              padding: isMobile ? '14px' : '18px',
               boxShadow: channelState.speak ? `0 0 30px ${channelColor}33` : 'none',
               marginBottom: '15px'
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+            {isMobile && selectedUserForAssign && !isCommandNet && myRole === 'commander' && (
+              <div style={{ background: 'rgba(0,255,100,0.2)', padding: '10px', borderRadius: '6px', marginBottom: '12px', textAlign: 'center', fontSize: '11px', color: '#00ff66' }}>
+                TAP TO ASSIGN {selectedUserForAssign.username.toUpperCase()}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', flexWrap: isMobile ? 'wrap' : 'nowrap', gap: '10px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <div style={{ width: '16px', height: '16px', borderRadius: '50%', background: channelColor, boxShadow: `0 0 10px ${channelColor}66` }} />
                 <div>
-                  <h2 style={{ margin: 0, fontSize: '15px', fontWeight: '500', letterSpacing: '2px', color: channelColor }}>
+                  <h2 style={{ margin: 0, fontSize: isMobile ? '14px' : '15px', fontWeight: '500', letterSpacing: '2px', color: channelColor }}>
                     {isCommandNet ? '📡 ' : ''}{channelName.toUpperCase()}
                   </h2>
                   <span style={{ fontSize: '9px', color: '#5a7a5a' }}>
                     {isCommandNet ? 'LEADERSHIP ONLY' : `${channelUsers.length} OPERATORS`}
-                    {isCommandNet && ' • Ctrl+` Listen • Ctrl+0 Speak'}
                   </span>
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: isMobile ? '100%' : 'auto', justifyContent: isMobile ? 'stretch' : 'flex-end' }}>
                 <button
-                  onClick={() => toggleChannelListen(channelId)}
-                  style={{ padding: '8px 12px', background: channelState.listen ? `${channelColor}33` : 'rgba(0,0,0,0.3)', border: `1px solid ${channelState.listen ? channelColor : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: channelState.listen ? channelColor : '#666', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  onClick={(e) => { e.stopPropagation(); toggleChannelListen(channelId); }}
+                  style={{ flex: isMobile ? 1 : 'none', padding: isMobile ? '14px 12px' : '8px 12px', background: channelState.listen ? `${channelColor}33` : 'rgba(0,0,0,0.3)', border: `1px solid ${channelState.listen ? channelColor : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: channelState.listen ? channelColor : '#666', fontSize: isMobile ? '13px' : '11px', cursor: 'pointer', fontFamily: 'inherit' }}
                 >
                   🎧 {channelState.listen ? 'ON' : 'OFF'}
                 </button>
                 <button
-                  onClick={() => toggleChannelSpeak(channelId)}
-                  style={{ padding: '8px 12px', background: channelState.speak ? `${channelColor}33` : 'rgba(0,0,0,0.3)', border: `1px solid ${channelState.speak ? channelColor : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: channelState.speak ? channelColor : '#666', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: '6px', animation: channelState.speak ? 'pulse 1s infinite' : 'none' }}
+                  onClick={(e) => { e.stopPropagation(); toggleChannelSpeak(channelId); }}
+                  style={{ flex: isMobile ? 1 : 'none', padding: isMobile ? '14px 12px' : '8px 12px', background: channelState.speak ? `${channelColor}33` : 'rgba(0,0,0,0.3)', border: `1px solid ${channelState.speak ? channelColor : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: channelState.speak ? channelColor : '#666', fontSize: isMobile ? '13px' : '11px', cursor: 'pointer', fontFamily: 'inherit', animation: channelState.speak ? 'pulse 1s infinite' : 'none' }}
                 >
                   🎙️ {channelState.speak ? 'TX' : 'OFF'}
                 </button>
-                {!isCommandNet && isHostRef.current && (
-                  <button onClick={() => deleteTeam(channel.id)} style={{ background: 'transparent', border: 'none', color: '#5a3a3a', fontSize: '18px', cursor: 'pointer', padding: '2px 8px' }} onMouseOver={(e) => e.target.style.color = '#ff4444'} onMouseOut={(e) => e.target.style.color = '#5a3a3a'}>×</button>
+                {!isCommandNet && isHostRef.current && !isMobile && (
+                  <button onClick={(e) => { e.stopPropagation(); deleteTeam(channel.id); }} style={{ background: 'transparent', border: 'none', color: '#5a3a3a', fontSize: '18px', cursor: 'pointer', padding: '2px 8px' }}>×</button>
                 )}
               </div>
             </div>
 
-            {/* Channel Members */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '15px', padding: '10px 12px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '15px', padding: isMobile ? '14px 12px' : '10px 12px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px' }}>
               <span style={{ fontSize: '9px', color: '#6a8a6a' }}>VOL</span>
               <input 
                 type="range" 
                 min="0" 
                 max="100" 
                 value={isCommandNet ? commandNetVolume : channel.volume} 
+                onClick={(e) => e.stopPropagation()}
                 onChange={(e) => {
                   if (isCommandNet) {
                     setCommandNetVolume(parseInt(e.target.value));
@@ -884,7 +941,7 @@
                     setTeams(prev => prev.map(t => t.id === channel.id ? { ...t, volume: parseInt(e.target.value) } : t));
                   }
                 }} 
-                style={{ flex: 1, height: '6px', appearance: 'none', background: `linear-gradient(to right, ${channelColor} ${isCommandNet ? commandNetVolume : channel.volume}%, rgba(100,100,100,0.3) ${isCommandNet ? commandNetVolume : channel.volume}%)`, borderRadius: '3px', cursor: 'pointer' }} 
+                style={{ flex: 1, height: '24px', appearance: 'none', WebkitAppearance: 'none', background: `linear-gradient(to right, ${channelColor} ${isCommandNet ? commandNetVolume : channel.volume}%, rgba(100,100,100,0.3) ${isCommandNet ? commandNetVolume : channel.volume}%)`, borderRadius: '4px', cursor: 'pointer' }} 
               />
               <span style={{ fontSize: '11px', color: channelColor, minWidth: '35px', textAlign: 'right' }}>{isCommandNet ? commandNetVolume : channel.volume}%</span>
             </div>
@@ -892,7 +949,7 @@
             <div style={{ minHeight: '40px', padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px dashed rgba(255,255,255,0.1)' }}>
               {channelUsers.length === 0 ? (
                 <div style={{ textAlign: 'center', color: '#4a6a4a', fontSize: '11px', padding: '5px' }}>
-                  {isCommandNet ? 'No leadership online' : (isHostRef.current ? 'Drag operators here' : 'No operators')}
+                  {isCommandNet ? 'No leadership online' : (isHostRef.current ? (isMobile ? 'Tap to assign users' : 'Drag operators here') : 'No operators')}
                 </div>
               ) : (
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -903,34 +960,39 @@
                     return (
                       <div
                         key={user.peerId}
-                        draggable={isHostRef.current && !user.isHost && !isCommandNet}
-                        onDragStart={(e) => handleDragStart(e, user)}
+                        draggable={isHostRef.current && !user.isHost && !isCommandNet && !isMobile}
+                        onDragStart={(e) => !isMobile && handleDragStart(e, user)}
                         onDragEnd={() => setDraggedUser(null)}
-                        className={isHostRef.current && !user.isHost && !isCommandNet ? 'user-chip' : ''}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isMobile && isHostRef.current && !user.isHost && !isCommandNet) {
+                            setSelectedUserForAssign(selectedUserForAssign?.peerId === user.peerId ? null : user);
+                          }
+                        }}
+                        className={isHostRef.current && !user.isHost && !isCommandNet && !isMobile ? 'user-chip' : ''}
                         style={{ 
                           display: 'flex', 
                           alignItems: 'center', 
                           gap: '8px', 
-                          padding: '8px 12px', 
-                          background: isSpeakingHere ? 'rgba(0,255,100,0.2)' : 'rgba(0,0,0,0.4)', 
-                          border: `1px solid ${isSpeakingHere ? 'rgba(0,255,100,0.5)' : 'rgba(255,255,255,0.1)'}`, 
-                          borderRadius: '6px',
-                          position: 'relative'
+                          padding: isMobile ? '12px 14px' : '8px 12px', 
+                          background: isSpeakingHere ? 'rgba(0,255,100,0.2)' : (selectedUserForAssign?.peerId === user.peerId ? 'rgba(0,255,100,0.15)' : 'rgba(0,0,0,0.4)'), 
+                          border: `1px solid ${isSpeakingHere ? 'rgba(0,255,100,0.5)' : (selectedUserForAssign?.peerId === user.peerId ? '#00ff66' : 'rgba(255,255,255,0.1)')}`, 
+                          borderRadius: '6px'
                         }}
                       >
                         <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: status.color, boxShadow: `0 0 6px ${status.color}`, animation: isSpeakingHere ? 'pulse 0.5s infinite' : 'none' }} />
                         <div>
-                          <div style={{ fontSize: '11px', color: user.peerId === peerRef.current?.id ? '#00ff66' : '#e0ffe0', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <div style={{ fontSize: isMobile ? '12px' : '11px', color: user.peerId === peerRef.current?.id ? '#00ff66' : '#e0ffe0', display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <span style={{ color: role.color }}>{role.icon}</span>
                             {user.username.toUpperCase()}
                             {user.peerId === peerRef.current?.id && <span style={{ fontSize: '9px', color: '#5a8a5a' }}>(YOU)</span>}
                           </div>
-                          {isHostRef.current && !user.isHost && !isCommandNet && (
+                          {isHostRef.current && !user.isHost && !isCommandNet && !isMobile && (
                             <div style={{ fontSize: '8px', marginTop: '2px' }}>
                               {user.role === 'squadleader' ? (
-                                <span onClick={() => demoteToOperator(user.peerId)} style={{ color: '#ff6666', cursor: 'pointer' }}>DEMOTE</span>
+                                <span onClick={(e) => { e.stopPropagation(); demoteToOperator(user.peerId); }} style={{ color: '#ff6666', cursor: 'pointer' }}>DEMOTE</span>
                               ) : (
-                                <span onClick={() => promoteToSquadLeader(user.peerId)} style={{ color: '#4ecdc4', cursor: 'pointer' }}>→ SQUAD LEADER</span>
+                                <span onClick={(e) => { e.stopPropagation(); promoteToSquadLeader(user.peerId); }} style={{ color: '#4ecdc4', cursor: 'pointer' }}>→ SL</span>
                               )}
                             </div>
                           )}
@@ -946,12 +1008,40 @@
                 </div>
               )}
             </div>
+            
+            {isMobile && isHostRef.current && !isCommandNet && channelUsers.filter(u => !u.isHost).length > 0 && (
+              <div style={{ marginTop: '12px', padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px' }}>
+                <div style={{ fontSize: '9px', color: '#5a7a5a', marginBottom: '8px', textAlign: 'center' }}>PROMOTE/DEMOTE</div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  {channelUsers.filter(u => !u.isHost).map(user => (
+                    <button
+                      key={user.peerId}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        user.role === 'squadleader' ? demoteToOperator(user.peerId) : promoteToSquadLeader(user.peerId);
+                      }}
+                      style={{
+                        padding: '10px 14px',
+                        background: user.role === 'squadleader' ? 'rgba(78,205,196,0.2)' : 'rgba(0,0,0,0.3)',
+                        border: `1px solid ${user.role === 'squadleader' ? '#4ecdc4' : 'rgba(100,100,100,0.3)'}`,
+                        borderRadius: '4px',
+                        color: user.role === 'squadleader' ? '#4ecdc4' : '#888',
+                        fontSize: '11px',
+                        fontFamily: 'inherit'
+                      }}
+                    >
+                      {user.username.slice(0, 8).toUpperCase()} {user.role === 'squadleader' ? '◆' : '→◆'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         );
       };
 
       return (
-        <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #0a0f0a 0%, #1a1f1a 50%, #0f1a0f 100%)', fontFamily: '"JetBrains Mono", monospace', color: '#e0ffe0', padding: '40px 20px', position: 'relative', overflow: 'hidden' }}>
+        <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #0a0f0a 0%, #1a1f1a 50%, #0f1a0f 100%)', fontFamily: '"JetBrains Mono", monospace', color: '#e0ffe0', padding: isMobile ? '20px 12px' : '40px 20px', position: 'relative', overflow: 'hidden' }}>
           <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.1) 2px, rgba(0,0,0,0.1) 4px)', pointerEvents: 'none', zIndex: 1000 }} />
           <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundImage: 'linear-gradient(rgba(0,255,100,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,100,0.03) 1px, transparent 1px)', backgroundSize: '50px 50px', pointerEvents: 'none' }} />
 
@@ -963,29 +1053,29 @@
 
           <div style={{ maxWidth: '1000px', margin: '0 auto', position: 'relative', zIndex: 1 }}>
             {/* Header */}
-            <div style={{ textAlign: 'center', marginBottom: '35px' }}>
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '15px', marginBottom: '8px' }}>
-                <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: sessionState !== 'lobby' ? '#00ff66' : '#ff6600', boxShadow: sessionState !== 'lobby' ? '0 0 20px #00ff66' : '0 0 10px #ff6600', animation: sessionState !== 'lobby' ? 'pulse 2s infinite' : 'none' }} />
-                <h1 style={{ fontSize: '38px', fontWeight: '300', letterSpacing: '6px', margin: 0, textShadow: '0 0 30px rgba(0,255,100,0.3)' }}>G-COMMS</h1>
-                <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: sessionState !== 'lobby' ? '#00ff66' : '#ff6600', boxShadow: sessionState !== 'lobby' ? '0 0 20px #00ff66' : '0 0 10px #ff6600', animation: sessionState !== 'lobby' ? 'pulse 2s infinite' : 'none' }} />
+            <div style={{ textAlign: 'center', marginBottom: isMobile ? '20px' : '35px' }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: isMobile ? '10px' : '15px', marginBottom: '8px' }}>
+                <div style={{ width: isMobile ? '10px' : '12px', height: isMobile ? '10px' : '12px', borderRadius: '50%', background: sessionState !== 'lobby' ? '#00ff66' : '#ff6600', boxShadow: sessionState !== 'lobby' ? '0 0 20px #00ff66' : '0 0 10px #ff6600', animation: sessionState !== 'lobby' ? 'pulse 2s infinite' : 'none' }} />
+                <h1 style={{ fontSize: isMobile ? '28px' : '38px', fontWeight: '300', letterSpacing: isMobile ? '4px' : '6px', margin: 0, textShadow: '0 0 30px rgba(0,255,100,0.3)' }}>G-COMMS</h1>
+                <div style={{ width: isMobile ? '10px' : '12px', height: isMobile ? '10px' : '12px', borderRadius: '50%', background: sessionState !== 'lobby' ? '#00ff66' : '#ff6600', boxShadow: sessionState !== 'lobby' ? '0 0 20px #00ff66' : '0 0 10px #ff6600', animation: sessionState !== 'lobby' ? 'pulse 2s infinite' : 'none' }} />
               </div>
-              <p style={{ fontSize: '10px', letterSpacing: '3px', color: '#6a9a6a', margin: 0 }}>GBRS COMMUNICATIONS SYSTEM v.0.9.3</p>
+              <p style={{ fontSize: isMobile ? '9px' : '10px', letterSpacing: isMobile ? '2px' : '3px', color: '#6a9a6a', margin: 0 }}>GBRS COMMUNICATIONS SYSTEM v.0.9.3</p>
             </div>
 
             {/* Lobby */}
             {sessionState === 'lobby' && (
-              <div style={{ maxWidth: '450px', margin: '0 auto' }}>
+              <div style={{ maxWidth: '450px', margin: '0 auto', padding: isMobile ? '0' : '0' }}>
                 <div style={{ marginBottom: '30px' }}>
                   <label style={{ display: 'block', fontSize: '10px', letterSpacing: '3px', color: '#6a9a6a', marginBottom: '10px' }}>YOUR CALLSIGN</label>
-                  <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Enter callsign..." style={{ width: '100%', padding: '15px 20px', background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(0,255,100,0.3)', borderRadius: '8px', color: '#e0ffe0', fontSize: '16px', outline: 'none', fontFamily: 'inherit' }} />
+                  <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Enter callsign..." style={{ width: '100%', padding: isMobile ? '18px 20px' : '15px 20px', background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(0,255,100,0.3)', borderRadius: '8px', color: '#e0ffe0', fontSize: '16px', outline: 'none', fontFamily: 'inherit' }} />
                 </div>
                 {error && <div style={{ padding: '12px', background: 'rgba(255,50,50,0.1)', border: '1px solid rgba(255,50,50,0.3)', borderRadius: '6px', color: '#ff6666', fontSize: '12px', marginBottom: '20px', textAlign: 'center' }}>{error}</div>}
-                <button onClick={hostSession} style={{ width: '100%', padding: '20px', marginBottom: '15px', background: 'linear-gradient(135deg, rgba(0,255,100,0.15), rgba(0,200,80,0.1))', border: '2px solid rgba(0,255,100,0.4)', borderRadius: '12px', color: '#00ff66', fontSize: '14px', fontWeight: '600', letterSpacing: '3px', cursor: 'pointer', fontFamily: 'inherit' }}>🛰️ HOST NEW SESSION</button>
+                <button onClick={hostSession} style={{ width: '100%', padding: isMobile ? '22px' : '20px', marginBottom: '15px', background: 'linear-gradient(135deg, rgba(0,255,100,0.15), rgba(0,200,80,0.1))', border: '2px solid rgba(0,255,100,0.4)', borderRadius: '12px', color: '#00ff66', fontSize: isMobile ? '15px' : '14px', fontWeight: '600', letterSpacing: '3px', cursor: 'pointer', fontFamily: 'inherit' }}>🛰️ HOST NEW SESSION</button>
                 <div style={{ textAlign: 'center', padding: '15px 0', color: '#4a6a4a', fontSize: '11px', letterSpacing: '2px' }}>— OR —</div>
-                <div style={{ background: 'rgba(0,20,0,0.4)', border: '1px solid rgba(0,255,100,0.15)', borderRadius: '12px', padding: '20px' }}>
+                <div style={{ background: 'rgba(0,20,0,0.4)', border: '1px solid rgba(0,255,100,0.15)', borderRadius: '12px', padding: isMobile ? '24px 20px' : '20px' }}>
                   <label style={{ display: 'block', fontSize: '10px', letterSpacing: '3px', color: '#6a9a6a', marginBottom: '10px' }}>SESSION CODE</label>
-                  <input type="text" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder="XXXXXX" maxLength={6} style={{ width: '100%', padding: '15px', background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(0,255,100,0.3)', borderRadius: '8px', color: '#e0ffe0', fontSize: '24px', letterSpacing: '8px', outline: 'none', fontFamily: 'inherit', textAlign: 'center', marginBottom: '15px' }} />
-                  <button onClick={joinSession} style={{ width: '100%', padding: '15px', background: 'transparent', border: '1px solid rgba(0,255,100,0.3)', borderRadius: '8px', color: '#8ac88a', fontSize: '12px', letterSpacing: '3px', cursor: 'pointer', fontFamily: 'inherit' }}>JOIN SESSION</button>
+                  <input type="text" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder="XXXXXX" maxLength={6} style={{ width: '100%', padding: isMobile ? '18px' : '15px', background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(0,255,100,0.3)', borderRadius: '8px', color: '#e0ffe0', fontSize: '24px', letterSpacing: '8px', outline: 'none', fontFamily: 'inherit', textAlign: 'center', marginBottom: '15px' }} />
+                  <button onClick={joinSession} style={{ width: '100%', padding: isMobile ? '18px' : '15px', background: 'transparent', border: '1px solid rgba(0,255,100,0.3)', borderRadius: '8px', color: '#8ac88a', fontSize: '12px', letterSpacing: '3px', cursor: 'pointer', fontFamily: 'inherit' }}>JOIN SESSION</button>
                 </div>
               </div>
             )}
@@ -994,26 +1084,26 @@
             {(sessionState === 'hosting' || sessionState === 'joined') && (
               <>
                 {/* Top Bar */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 18px', background: 'rgba(0,20,0,0.6)', border: '1px solid rgba(0,255,100,0.2)', borderRadius: '10px', marginBottom: '15px', flexWrap: 'wrap', gap: '15px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
-                    <div>
+                <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', padding: isMobile ? '12px' : '12px 18px', background: 'rgba(0,20,0,0.6)', border: '1px solid rgba(0,255,100,0.2)', borderRadius: '10px', marginBottom: '15px', gap: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '12px' : '20px', flexWrap: 'wrap', justifyContent: isMobile ? 'center' : 'flex-start' }}>
+                    <div style={{ textAlign: isMobile ? 'center' : 'left' }}>
                       <span style={{ fontSize: '9px', color: '#5a8a5a', letterSpacing: '2px' }}>SESSION</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
-                        <span style={{ fontSize: '18px', letterSpacing: '4px', color: '#00ff66', fontWeight: '600' }}>{sessionCode}</span>
-                        <button onClick={copyCode} style={{ background: 'rgba(0,255,100,0.1)', border: '1px solid rgba(0,255,100,0.3)', borderRadius: '4px', color: '#00ff66', padding: '4px 8px', fontSize: '9px', cursor: 'pointer', fontFamily: 'inherit' }}>COPY</button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px', justifyContent: isMobile ? 'center' : 'flex-start' }}>
+                        <span style={{ fontSize: isMobile ? '16px' : '18px', letterSpacing: '4px', color: '#00ff66', fontWeight: '600' }}>{sessionCode}</span>
+                        <button onClick={copyCode} style={{ background: 'rgba(0,255,100,0.1)', border: '1px solid rgba(0,255,100,0.3)', borderRadius: '4px', color: '#00ff66', padding: '6px 10px', fontSize: '9px', cursor: 'pointer', fontFamily: 'inherit' }}>COPY</button>
                       </div>
                     </div>
-                    <div style={{ width: '1px', height: '35px', background: 'rgba(0,255,100,0.2)' }} />
-                    <div>
+                    {!isMobile && <div style={{ width: '1px', height: '35px', background: 'rgba(0,255,100,0.2)' }} />}
+                    <div style={{ textAlign: isMobile ? 'center' : 'left' }}>
                       <span style={{ fontSize: '9px', color: '#5a8a5a', letterSpacing: '2px' }}>ROLE</span>
-                      <div style={{ fontSize: '12px', marginTop: '4px', color: roleConfig[myRole].color, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <div style={{ fontSize: '12px', marginTop: '4px', color: roleConfig[myRole].color, display: 'flex', alignItems: 'center', gap: '6px', justifyContent: isMobile ? 'center' : 'flex-start' }}>
                         {roleConfig[myRole].icon} {roleConfig[myRole].label}
                       </div>
                     </div>
                     {myRole === 'operator' && myChannelId && (
                       <>
-                        <div style={{ width: '1px', height: '35px', background: 'rgba(0,255,100,0.2)' }} />
-                        <div>
+                        {!isMobile && <div style={{ width: '1px', height: '35px', background: 'rgba(0,255,100,0.2)' }} />}
+                        <div style={{ textAlign: isMobile ? 'center' : 'left' }}>
                           <span style={{ fontSize: '9px', color: '#5a8a5a', letterSpacing: '2px' }}>CHANNEL</span>
                           <div style={{ fontSize: '12px', marginTop: '4px', color: teams.find(t => t.id === myChannelId)?.color || '#00ff66' }}>
                             {teams.find(t => t.id === myChannelId)?.name.toUpperCase() || 'UNASSIGNED'}
@@ -1021,48 +1111,49 @@
                         </div>
                       </>
                     )}
-                    <div style={{ width: '1px', height: '35px', background: 'rgba(0,255,100,0.2)' }} />
-                    <div>
+                    {!isMobile && <div style={{ width: '1px', height: '35px', background: 'rgba(0,255,100,0.2)' }} />}
+                    <div style={{ textAlign: isMobile ? 'center' : 'left' }}>
                       <span style={{ fontSize: '9px', color: '#5a8a5a', letterSpacing: '2px' }}>STATUS</span>
                       <div style={{ fontSize: '12px', marginTop: '4px', color: statusConfig[myStatus].color }}>{statusConfig[myStatus].icon} {statusConfig[myStatus].label}</div>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button onClick={() => setGlobalMute(!globalMute)} style={{ background: globalMute ? 'rgba(255,50,50,0.2)' : 'rgba(0,255,100,0.1)', border: `1px solid ${globalMute ? 'rgba(255,50,50,0.5)' : 'rgba(0,255,100,0.3)'}`, borderRadius: '6px', color: globalMute ? '#ff6666' : '#00ff66', padding: '8px 12px', fontSize: '14px', cursor: 'pointer' }}>{globalMute ? '🔇' : '🔊'}</button>
-                    <button onClick={leaveSession} style={{ background: 'rgba(255,50,50,0.1)', border: '1px solid rgba(255,50,50,0.3)', borderRadius: '6px', color: '#ff6666', padding: '8px 14px', fontSize: '10px', letterSpacing: '2px', cursor: 'pointer', fontFamily: 'inherit' }}>LEAVE</button>
+                  <div style={{ display: 'flex', gap: '8px', justifyContent: isMobile ? 'center' : 'flex-end' }}>
+                    <button onClick={() => setGlobalMute(!globalMute)} style={{ background: globalMute ? 'rgba(255,50,50,0.2)' : 'rgba(0,255,100,0.1)', border: `1px solid ${globalMute ? 'rgba(255,50,50,0.5)' : 'rgba(0,255,100,0.3)'}`, borderRadius: '6px', color: globalMute ? '#ff6666' : '#00ff66', padding: isMobile ? '12px 16px' : '8px 12px', fontSize: '16px', cursor: 'pointer' }}>{globalMute ? '🔇' : '🔊'}</button>
+                    <button onClick={leaveSession} style={{ background: 'rgba(255,50,50,0.1)', border: '1px solid rgba(255,50,50,0.3)', borderRadius: '6px', color: '#ff6666', padding: isMobile ? '12px 18px' : '8px 14px', fontSize: '10px', letterSpacing: '2px', cursor: 'pointer', fontFamily: 'inherit' }}>LEAVE</button>
                   </div>
                 </div>
 
                 {/* Signals */}
-                <div style={{ display: 'flex', gap: '10px', marginBottom: '15px', padding: '15px', background: 'rgba(0,20,0,0.4)', border: '1px solid rgba(255,200,0,0.2)', borderRadius: '10px', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '10px', letterSpacing: '2px', color: '#aa9944', display: 'flex', alignItems: 'center', marginRight: '10px' }}>SIGNALS</span>
-                  <button onClick={() => broadcastWhistle('attention')} style={{ flex: 1, minWidth: '100px', padding: '10px 15px', background: 'rgba(255,200,0,0.1)', border: '1px solid rgba(255,200,0,0.4)', borderRadius: '6px', color: '#ffcc00', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit' }}>📯 ATTENTION</button>
-                  <button onClick={() => broadcastWhistle('alert')} style={{ flex: 1, minWidth: '100px', padding: '10px 15px', background: 'rgba(255,150,0,0.1)', border: '1px solid rgba(255,150,0,0.4)', borderRadius: '6px', color: '#ff9900', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit' }}>🔔 ALERT</button>
-                  <button onClick={() => broadcastWhistle('urgent')} style={{ flex: 1, minWidth: '100px', padding: '10px 15px', background: 'rgba(255,80,80,0.1)', border: '1px solid rgba(255,80,80,0.4)', borderRadius: '6px', color: '#ff6666', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit' }}>⚠️ URGENT</button>
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '15px', padding: isMobile ? '12px' : '15px', background: 'rgba(0,20,0,0.4)', border: '1px solid rgba(255,200,0,0.2)', borderRadius: '10px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '10px', letterSpacing: '2px', color: '#aa9944', display: 'flex', alignItems: 'center', marginRight: '5px', width: isMobile ? '100%' : 'auto', justifyContent: isMobile ? 'center' : 'flex-start', marginBottom: isMobile ? '8px' : '0' }}>SIGNALS</span>
+                  <button onClick={() => broadcastWhistle('attention')} style={{ flex: 1, minWidth: isMobile ? '30%' : '100px', padding: isMobile ? '14px 10px' : '10px 15px', background: 'rgba(255,200,0,0.1)', border: '1px solid rgba(255,200,0,0.4)', borderRadius: '6px', color: '#ffcc00', fontSize: isMobile ? '10px' : '11px', cursor: 'pointer', fontFamily: 'inherit' }}>📯 ATTN</button>
+                  <button onClick={() => broadcastWhistle('alert')} style={{ flex: 1, minWidth: isMobile ? '30%' : '100px', padding: isMobile ? '14px 10px' : '10px 15px', background: 'rgba(255,150,0,0.1)', border: '1px solid rgba(255,150,0,0.4)', borderRadius: '6px', color: '#ff9900', fontSize: isMobile ? '10px' : '11px', cursor: 'pointer', fontFamily: 'inherit' }}>🔔 ALERT</button>
+                  <button onClick={() => broadcastWhistle('urgent')} style={{ flex: 1, minWidth: isMobile ? '30%' : '100px', padding: isMobile ? '14px 10px' : '10px 15px', background: 'rgba(255,80,80,0.1)', border: '1px solid rgba(255,80,80,0.4)', borderRadius: '6px', color: '#ff6666', fontSize: isMobile ? '10px' : '11px', cursor: 'pointer', fontFamily: 'inherit' }}>⚠️ URGENT</button>
                 </div>
 
                 {/* ALL-CALL Panel (Commander only) */}
                 {myRole === 'commander' && (
-                  <div style={{ background: allCallActive ? 'rgba(255,50,50,0.2)' : 'rgba(0,20,0,0.5)', border: `2px solid ${allCallActive ? 'rgba(255,100,100,0.6)' : 'rgba(0,255,100,0.2)'}`, borderRadius: '10px', padding: '15px', marginBottom: '15px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '15px' }}>
-                      <div>
+                  <div style={{ background: allCallActive ? 'rgba(255,50,50,0.2)' : 'rgba(0,20,0,0.5)', border: `2px solid ${allCallActive ? 'rgba(255,100,100,0.6)' : 'rgba(0,255,100,0.2)'}`, borderRadius: '10px', padding: isMobile ? '12px' : '15px', marginBottom: '15px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexDirection: isMobile ? 'column' : 'row', gap: '12px' }}>
+                      <div style={{ textAlign: isMobile ? 'center' : 'left' }}>
                         <span style={{ fontSize: '11px', letterSpacing: '2px', color: '#ffcc00' }}>★ COMMANDER BROADCAST</span>
-                        <div style={{ fontSize: '9px', color: '#5a7a5a', marginTop: '4px' }}>Ctrl+0: All-Call to ALL squads simultaneously</div>
+                        {!isMobile && <div style={{ fontSize: '9px', color: '#5a7a5a', marginTop: '4px' }}>Ctrl+0: All-Call to ALL squads simultaneously</div>}
                       </div>
                       <button 
                         onClick={() => setAllCallActive(!allCallActive)}
                         style={{ 
-                          padding: '12px 24px', 
+                          padding: isMobile ? '16px 32px' : '12px 24px', 
                           background: allCallActive ? 'rgba(255,50,50,0.3)' : 'rgba(255,50,50,0.1)', 
                           border: `2px solid ${allCallActive ? '#ff6666' : 'rgba(255,100,100,0.4)'}`,
                           borderRadius: '8px', 
                           color: allCallActive ? '#ff6666' : '#ff9999', 
-                          fontSize: '12px', 
+                          fontSize: isMobile ? '14px' : '12px', 
                           fontWeight: '600',
                           letterSpacing: '2px', 
                           cursor: 'pointer', 
                           fontFamily: 'inherit',
-                          animation: allCallActive ? 'pulse 0.5s infinite' : 'none'
+                          animation: allCallActive ? 'pulse 0.5s infinite' : 'none',
+                          width: isMobile ? '100%' : 'auto'
                         }}
                       >
                         📢 ALL-CALL {allCallActive ? 'ACTIVE' : 'OFF'}
@@ -1091,33 +1182,63 @@
                   </div>
                 </div>
 
-                {/* Hotkeys */}
-                <div style={{ marginBottom: '15px', padding: '10px 15px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px', display: 'flex', gap: '15px', flexWrap: 'wrap', justifyContent: 'center' }}>
-                  <span style={{ fontSize: '9px', color: '#5a7a5a' }}><kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 5px', borderRadius: '3px' }}>Ctrl+M</kbd> Mute</span>
-                  <span style={{ fontSize: '9px', color: '#5a7a5a' }}><kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 5px', borderRadius: '3px' }}>Ctrl+Shift+A</kbd> Ready</span>
-                  <span style={{ fontSize: '9px', color: '#5a7a5a' }}><kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 5px', borderRadius: '3px' }}>Ctrl+Alt+D</kbd> Down</span>
-                  <span style={{ fontSize: '9px', color: '#5a7a5a' }}><kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 5px', borderRadius: '3px' }}>Ctrl+Alt+W</kbd> Wait</span>
-                </div>
+                {/* Hotkeys (Desktop) / Status Buttons (Mobile) */}
+                {isMobile ? (
+                  <div style={{ marginBottom: '15px', padding: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '9px', color: '#5a7a5a', textAlign: 'center', marginBottom: '10px' }}>SET STATUS</div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                      <button onClick={() => broadcastStatus('ready')} style={{ padding: '12px 16px', background: myStatus === 'ready' ? 'rgba(0,255,100,0.2)' : 'rgba(0,0,0,0.3)', border: `1px solid ${myStatus === 'ready' ? '#00ff66' : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: '#00ff66', fontSize: '11px', fontFamily: 'inherit' }}>🟢 READY</button>
+                      <button onClick={() => broadcastStatus('wait')} style={{ padding: '12px 16px', background: myStatus === 'wait' ? 'rgba(255,170,0,0.2)' : 'rgba(0,0,0,0.3)', border: `1px solid ${myStatus === 'wait' ? '#ffaa00' : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: '#ffaa00', fontSize: '11px', fontFamily: 'inherit' }}>🟡 WAIT</button>
+                      <button onClick={() => broadcastStatus('dead')} style={{ padding: '12px 16px', background: myStatus === 'dead' ? 'rgba(255,50,50,0.2)' : 'rgba(0,0,0,0.3)', border: `1px solid ${myStatus === 'dead' ? '#ff4444' : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: '#ff4444', fontSize: '11px', fontFamily: 'inherit' }}>🔴 DOWN</button>
+                      <button onClick={() => broadcastStatus('standby')} style={{ padding: '12px 16px', background: myStatus === 'standby' ? 'rgba(100,100,100,0.2)' : 'rgba(0,0,0,0.3)', border: `1px solid ${myStatus === 'standby' ? '#666' : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: '#888', fontSize: '11px', fontFamily: 'inherit' }}>⚫ STANDBY</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ marginBottom: '15px', padding: '10px 15px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px', display: 'flex', gap: '15px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                    <span style={{ fontSize: '9px', color: '#5a7a5a' }}><kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 5px', borderRadius: '3px' }}>Ctrl+M</kbd> Mute</span>
+                    <span style={{ fontSize: '9px', color: '#5a7a5a' }}><kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 5px', borderRadius: '3px' }}>Ctrl+Shift+A</kbd> Ready</span>
+                    <span style={{ fontSize: '9px', color: '#5a7a5a' }}><kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 5px', borderRadius: '3px' }}>Ctrl+Alt+D</kbd> Down</span>
+                    <span style={{ fontSize: '9px', color: '#5a7a5a' }}><kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 5px', borderRadius: '3px' }}>Ctrl+Alt+W</kbd> Wait</span>
+                  </div>
+                )}
 
                 {/* Unassigned Users (Commander only) */}
                 {myRole === 'commander' && getUnassignedUsers().length > 0 && (
-                  <div style={{ background: 'rgba(100,50,0,0.2)', border: '1px solid rgba(255,150,0,0.3)', borderRadius: '10px', padding: '15px', marginBottom: '15px' }}>
-                    <div style={{ fontSize: '10px', letterSpacing: '2px', color: '#ff9900', marginBottom: '10px' }}>⚠️ UNASSIGNED — Drag to channel</div>
+                  <div style={{ background: 'rgba(100,50,0,0.2)', border: '1px solid rgba(255,150,0,0.3)', borderRadius: '10px', padding: isMobile ? '12px' : '15px', marginBottom: '15px' }}>
+                    <div style={{ fontSize: '10px', letterSpacing: '2px', color: '#ff9900', marginBottom: '10px' }}>
+                      ⚠️ UNASSIGNED — {isMobile ? 'Tap user, then tap channel' : 'Drag to channel'}
+                    </div>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                       {getUnassignedUsers().map(user => (
                         <div
                           key={user.peerId}
-                          draggable
-                          onDragStart={(e) => handleDragStart(e, user)}
+                          draggable={!isMobile}
+                          onDragStart={(e) => !isMobile && handleDragStart(e, user)}
                           onDragEnd={() => setDraggedUser(null)}
-                          className="user-chip"
-                          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,150,0,0.4)', borderRadius: '6px' }}
+                          onClick={() => isMobile && setSelectedUserForAssign(selectedUserForAssign?.peerId === user.peerId ? null : user)}
+                          className={!isMobile ? "user-chip" : ""}
+                          style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: '8px', 
+                            padding: isMobile ? '12px 16px' : '8px 12px', 
+                            background: selectedUserForAssign?.peerId === user.peerId ? 'rgba(0,255,100,0.2)' : 'rgba(0,0,0,0.4)', 
+                            border: `2px solid ${selectedUserForAssign?.peerId === user.peerId ? '#00ff66' : 'rgba(255,150,0,0.4)'}`, 
+                            borderRadius: '6px',
+                            cursor: 'pointer'
+                          }}
                         >
                           <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: statusConfig[user.status || 'standby'].color }} />
-                          <span style={{ fontSize: '11px' }}>{user.username.toUpperCase()}</span>
+                          <span style={{ fontSize: isMobile ? '12px' : '11px' }}>{user.username.toUpperCase()}</span>
+                          {selectedUserForAssign?.peerId === user.peerId && <span style={{ fontSize: '10px', color: '#00ff66' }}>✓</span>}
                         </div>
                       ))}
                     </div>
+                    {isMobile && selectedUserForAssign && (
+                      <div style={{ marginTop: '10px', fontSize: '10px', color: '#00ff66', textAlign: 'center' }}>
+                        Now tap a channel below to assign {selectedUserForAssign.username.toUpperCase()}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1128,7 +1249,7 @@
 
                 {/* Create Channel (Commander) */}
                 {myRole === 'commander' && (
-                  <button onClick={() => setShowCreateModal(true)} style={{ width: '100%', padding: '16px', marginBottom: '15px', background: 'transparent', border: '2px dashed rgba(0,255,100,0.3)', borderRadius: '12px', color: '#4a8a4a', fontSize: '12px', letterSpacing: '3px', cursor: 'pointer', fontFamily: 'inherit' }}>+ CREATE CHANNEL</button>
+                  <button onClick={() => setShowCreateModal(true)} style={{ width: '100%', padding: isMobile ? '18px' : '16px', marginBottom: '15px', background: 'transparent', border: '2px dashed rgba(0,255,100,0.3)', borderRadius: '12px', color: '#4a8a4a', fontSize: '12px', letterSpacing: '3px', cursor: 'pointer', fontFamily: 'inherit' }}>+ CREATE CHANNEL</button>
                 )}
 
                 {/* Squad Channels */}
