@@ -1046,17 +1046,26 @@
           });
           
           // Check for stale connections (no heartbeat in 10 seconds)
-          let hasStaleConnection = false;
-          lastHeartbeatRef.current.forEach((timestamp, peerId) => {
-            if (now - timestamp > 10000) {
-              hasStaleConnection = true;
-              console.log('Stale connection detected:', peerId);
-            }
-          });
+          // Only check if we have active connections to check
+          const activeConnections = Array.from(connectionsRef.current.keys()).filter(id => id !== peerRef.current?.id);
           
-          if (hasStaleConnection && connectionHealth === 'good') {
-            setConnectionHealth('degraded');
-          } else if (!hasStaleConnection && connectionHealth === 'degraded') {
+          if (activeConnections.length > 0) {
+            let hasStaleConnection = false;
+            activeConnections.forEach(peerId => {
+              const lastHeartbeat = lastHeartbeatRef.current.get(peerId);
+              if (!lastHeartbeat || now - lastHeartbeat > 10000) {
+                hasStaleConnection = true;
+                console.log('Stale connection detected:', peerId);
+              }
+            });
+            
+            if (hasStaleConnection && connectionHealth === 'good') {
+              setConnectionHealth('degraded');
+            } else if (!hasStaleConnection && connectionHealth === 'degraded') {
+              setConnectionHealth('good');
+            }
+          } else if (connectionHealth === 'degraded') {
+            // No connections to check, reset to good
             setConnectionHealth('good');
           }
         }, 3000);
