@@ -74,6 +74,7 @@
       const [incomingWhistle, setIncomingWhistle] = useState(null);
       const [draggedUser, setDraggedUser] = useState(null);
       const [commandNetVolume, setCommandNetVolume] = useState(80);
+      const [allCallActive, setAllCallActive] = useState(false);
       
       const peerRef = useRef(null);
       const connectionsRef = useRef(new Map());
@@ -89,6 +90,7 @@
       const myRoleRef = useRef(myRole);
       const connectedUsersRef = useRef(connectedUsers);
       const channelStatesRef = useRef(channelStates);
+      const allCallActiveRef = useRef(allCallActive);
 
       useEffect(() => { teamsRef.current = teams; }, [teams]);
       useEffect(() => { myStatusRef.current = myStatus; }, [myStatus]);
@@ -96,17 +98,24 @@
       useEffect(() => { myRoleRef.current = myRole; }, [myRole]);
       useEffect(() => { connectedUsersRef.current = connectedUsers; }, [connectedUsers]);
       useEffect(() => { channelStatesRef.current = channelStates; }, [channelStates]);
+      useEffect(() => { allCallActiveRef.current = allCallActive; }, [allCallActive]);
 
       // Check if currently speaking on any channel
-      const isSpeaking = !globalMute && Object.values(channelStates).some(s => s.speak);
+      const isSpeaking = !globalMute && (allCallActive || Object.values(channelStates).some(s => s.speak));
       
       // Get channels I'm speaking to
       const getSpeakingChannels = useCallback(() => {
         if (globalMute) return [];
+        
+        // If ALL-CALL is active (commander only), return all squad channels
+        if (allCallActive && myRoleRef.current === 'commander') {
+          return teamsRef.current.map(t => t.id);
+        }
+        
         return Object.entries(channelStates)
           .filter(([_, state]) => state.speak)
           .map(([id, _]) => id === COMMAND_NET_ID ? COMMAND_NET_ID : parseInt(id));
-      }, [channelStates, globalMute]);
+      }, [channelStates, globalMute, allCallActive]);
 
       const colorOptions = [
         '#00ff66', '#ffcc00', '#ff6b6b', '#4ecdc4', '#a855f7', 
@@ -220,7 +229,7 @@
           const channels = getSpeakingChannels();
           broadcastSpeakingState(channels);
         }
-      }, [channelStates, sessionState, globalMute, getSpeakingChannels, broadcastSpeakingState]);
+      }, [channelStates, sessionState, globalMute, allCallActive, getSpeakingChannels, broadcastSpeakingState]);
 
       // Toggle channel listen/speak
       const toggleChannelListen = (channelId) => {
@@ -355,16 +364,22 @@
           if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'w') {
             e.preventDefault(); broadcastWhistle('attention'); return;
           }
-          // Ctrl+0 - Toggle Command Net speak (if visible)
-          if (e.ctrlKey && e.key === '0' && canSeeCommandNet(myRoleRef.current)) {
+          // Ctrl+0 - Toggle ALL-CALL (commander only)
+          if (e.ctrlKey && e.key === '0' && myRoleRef.current === 'commander') {
             e.preventDefault();
-            toggleChannelSpeak(COMMAND_NET_ID);
+            setAllCallActive(prev => !prev);
             return;
           }
           // Ctrl+` - Toggle Command Net listen (if visible)
           if (e.ctrlKey && e.key === '`' && canSeeCommandNet(myRoleRef.current)) {
             e.preventDefault();
             toggleChannelListen(COMMAND_NET_ID);
+            return;
+          }
+          // Ctrl+Shift+0 - Toggle Command Net speak (if visible)
+          if (e.ctrlKey && e.shiftKey && e.key === ')' && canSeeCommandNet(myRoleRef.current)) {
+            e.preventDefault();
+            toggleChannelSpeak(COMMAND_NET_ID);
             return;
           }
         };
@@ -705,6 +720,7 @@
         setMyRole('operator');
         setMyStatus('standby');
         setChannelStates({});
+        setAllCallActive(false);
         isHostRef.current = false;
       };
 
@@ -746,7 +762,7 @@
             ? { ...u, status: myStatus, speaking: isSpeaking, speakingChannels: speakingChannels } 
             : u
         ));
-      }, [myStatus, isSpeaking, getSpeakingChannels]);
+      }, [myStatus, isSpeaking, allCallActive, getSpeakingChannels]);
 
       // Drag and drop
       const handleDragStart = (e, user) => { if (isHostRef.current) setDraggedUser(user); };
@@ -825,6 +841,25 @@
             </div>
 
             {/* Channel Members */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '15px', padding: '10px 12px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px' }}>
+              <span style={{ fontSize: '9px', color: '#6a8a6a' }}>VOL</span>
+              <input 
+                type="range" 
+                min="0" 
+                max="100" 
+                value={isCommandNet ? commandNetVolume : channel.volume} 
+                onChange={(e) => {
+                  if (isCommandNet) {
+                    setCommandNetVolume(parseInt(e.target.value));
+                  } else {
+                    setTeams(prev => prev.map(t => t.id === channel.id ? { ...t, volume: parseInt(e.target.value) } : t));
+                  }
+                }} 
+                style={{ flex: 1, height: '6px', appearance: 'none', background: `linear-gradient(to right, ${channelColor} ${isCommandNet ? commandNetVolume : channel.volume}%, rgba(100,100,100,0.3) ${isCommandNet ? commandNetVolume : channel.volume}%)`, borderRadius: '3px', cursor: 'pointer' }} 
+              />
+              <span style={{ fontSize: '11px', color: channelColor, minWidth: '35px', textAlign: 'right' }}>{isCommandNet ? commandNetVolume : channel.volume}%</span>
+            </div>
+
             <div style={{ minHeight: '40px', padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px dashed rgba(255,255,255,0.1)' }}>
               {channelUsers.length === 0 ? (
                 <div style={{ textAlign: 'center', color: '#4a6a4a', fontSize: '11px', padding: '5px' }}>
@@ -977,17 +1012,47 @@
                   <button onClick={() => broadcastWhistle('urgent')} style={{ flex: 1, minWidth: '100px', padding: '10px 15px', background: 'rgba(255,80,80,0.1)', border: '1px solid rgba(255,80,80,0.4)', borderRadius: '6px', color: '#ff6666', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit' }}>⚠️ URGENT</button>
                 </div>
 
+                {/* ALL-CALL Panel (Commander only) */}
+                {myRole === 'commander' && (
+                  <div style={{ background: allCallActive ? 'rgba(255,50,50,0.2)' : 'rgba(0,20,0,0.5)', border: `2px solid ${allCallActive ? 'rgba(255,100,100,0.6)' : 'rgba(0,255,100,0.2)'}`, borderRadius: '10px', padding: '15px', marginBottom: '15px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '15px' }}>
+                      <div>
+                        <span style={{ fontSize: '11px', letterSpacing: '2px', color: '#ffcc00' }}>★ COMMANDER BROADCAST</span>
+                        <div style={{ fontSize: '9px', color: '#5a7a5a', marginTop: '4px' }}>Ctrl+0: All-Call to ALL squads simultaneously</div>
+                      </div>
+                      <button 
+                        onClick={() => setAllCallActive(!allCallActive)}
+                        style={{ 
+                          padding: '12px 24px', 
+                          background: allCallActive ? 'rgba(255,50,50,0.3)' : 'rgba(255,50,50,0.1)', 
+                          border: `2px solid ${allCallActive ? '#ff6666' : 'rgba(255,100,100,0.4)'}`,
+                          borderRadius: '8px', 
+                          color: allCallActive ? '#ff6666' : '#ff9999', 
+                          fontSize: '12px', 
+                          fontWeight: '600',
+                          letterSpacing: '2px', 
+                          cursor: 'pointer', 
+                          fontFamily: 'inherit',
+                          animation: allCallActive ? 'pulse 0.5s infinite' : 'none'
+                        }}
+                      >
+                        📢 ALL-CALL {allCallActive ? 'ACTIVE' : 'OFF'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* TX Meter */}
                 {isSpeaking && (
-                  <div style={{ marginBottom: '15px', padding: '12px 18px', background: 'rgba(0,20,0,0.6)', border: '1px solid rgba(0,255,100,0.2)', borderRadius: '8px' }}>
+                  <div style={{ marginBottom: '15px', padding: '12px 18px', background: allCallActive ? 'rgba(255,50,50,0.2)' : 'rgba(0,20,0,0.6)', border: `1px solid ${allCallActive ? 'rgba(255,100,100,0.4)' : 'rgba(0,255,100,0.2)'}`, borderRadius: '8px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                      <span style={{ fontSize: '10px', letterSpacing: '2px', color: '#00ff66' }}>
-                        TX → {getSpeakingChannels().map(ch => ch === COMMAND_NET_ID ? 'CMD NET' : teams.find(t => t.id === ch)?.name || ch).join(', ')}
+                      <span style={{ fontSize: '10px', letterSpacing: '2px', color: allCallActive ? '#ff6666' : '#00ff66' }}>
+                        TX → {allCallActive ? '📢 ALL SQUADS' : getSpeakingChannels().map(ch => ch === COMMAND_NET_ID ? 'CMD NET' : teams.find(t => t.id === ch)?.name || ch).join(', ')}
                       </span>
                       <div style={{ flex: 1, height: '8px', background: 'rgba(0,0,0,0.5)', borderRadius: '4px', overflow: 'hidden' }}>
-                        <div style={{ width: `${audioLevel * 100}%`, height: '100%', background: audioLevel > 0.7 ? 'linear-gradient(90deg, #00ff66, #ffff00, #ff3300)' : '#00ff66', transition: 'width 0.05s' }} />
+                        <div style={{ width: `${audioLevel * 100}%`, height: '100%', background: audioLevel > 0.7 ? 'linear-gradient(90deg, #00ff66, #ffff00, #ff3300)' : (allCallActive ? '#ff6666' : '#00ff66'), transition: 'width 0.05s' }} />
                       </div>
-                      <span style={{ fontSize: '11px', fontWeight: 'bold', color: audioLevel > 0.7 ? '#ff3300' : '#00ff66', minWidth: '35px' }}>{Math.round(audioLevel * 100)}%</span>
+                      <span style={{ fontSize: '11px', fontWeight: 'bold', color: audioLevel > 0.7 ? '#ff3300' : (allCallActive ? '#ff6666' : '#00ff66'), minWidth: '35px' }}>{Math.round(audioLevel * 100)}%</span>
                     </div>
                   </div>
                 )}
@@ -1051,6 +1116,15 @@
                   <div style={{ textAlign: 'center', padding: '50px', color: '#ff9900', background: 'rgba(100,50,0,0.2)', borderRadius: '12px', border: '1px solid rgba(255,150,0,0.3)' }}>
                     <p style={{ fontSize: '14px', letterSpacing: '2px', marginBottom: '10px' }}>⏳ AWAITING ASSIGNMENT</p>
                     <p style={{ fontSize: '11px', color: '#aa7733' }}>Commander will assign you to a channel</p>
+                  </div>
+                )}
+
+                {/* Notification when commander is broadcasting ALL-CALL */}
+                {connectedUsers.find(u => u.isHost && u.speaking && u.speakingChannels && u.speakingChannels.length > 1) && myRole !== 'commander' && (
+                  <div style={{ position: 'fixed', bottom: '20px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(255,50,50,0.2)', border: '2px solid rgba(255,100,100,0.6)', borderRadius: '10px', padding: '12px 24px', zIndex: 2000, animation: 'pulse 0.5s infinite' }}>
+                    <span style={{ fontSize: '12px', letterSpacing: '2px', color: '#ff6666' }}>
+                      📢 COMMANDER ALL-CALL
+                    </span>
                   </div>
                 )}
               </>
