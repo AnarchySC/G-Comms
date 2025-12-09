@@ -122,6 +122,7 @@
       const [allCallActive, setAllCallActive] = useState(false);
       const [selectedUserForAssign, setSelectedUserForAssign] = useState(null); // Mobile: tap user then tap channel
       const [wasKicked, setWasKicked] = useState(false);
+      const [wakeLockActive, setWakeLockActive] = useState(false);
       
       const peerRef = useRef(null);
       const connectionsRef = useRef(new Map());
@@ -138,6 +139,34 @@
       const connectedUsersRef = useRef(connectedUsers);
       const channelStatesRef = useRef(channelStates);
       const allCallActiveRef = useRef(allCallActive);
+      const wakeLockRef = useRef(null);
+
+      // Wake Lock - prevent screen from sleeping during session
+      const requestWakeLock = async () => {
+        if ('wakeLock' in navigator) {
+          try {
+            wakeLockRef.current = await navigator.wakeLock.request('screen');
+            setWakeLockActive(true);
+            console.log('Wake lock active - screen will stay on');
+            wakeLockRef.current.addEventListener('release', () => {
+              setWakeLockActive(false);
+              console.log('Wake lock released');
+            });
+          } catch (err) {
+            console.log('Wake lock failed:', err.message);
+          }
+        } else {
+          console.log('Wake Lock API not supported');
+        }
+      };
+
+      const releaseWakeLock = () => {
+        if (wakeLockRef.current) {
+          wakeLockRef.current.release();
+          wakeLockRef.current = null;
+          setWakeLockActive(false);
+        }
+      };
 
       useEffect(() => { teamsRef.current = teams; }, [teams]);
       useEffect(() => { myStatusRef.current = myStatus; }, [myStatus]);
@@ -146,6 +175,17 @@
       useEffect(() => { connectedUsersRef.current = connectedUsers; }, [connectedUsers]);
       useEffect(() => { channelStatesRef.current = channelStates; }, [channelStates]);
       useEffect(() => { allCallActiveRef.current = allCallActive; }, [allCallActive]);
+
+      // Re-acquire wake lock when tab becomes visible again
+      useEffect(() => {
+        const handleVisibilityChange = () => {
+          if (document.visibilityState === 'visible' && sessionState !== 'lobby') {
+            requestWakeLock();
+          }
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }, [sessionState]);
 
       // Check if currently speaking on any channel
       const isSpeaking = useMemo(() => {
@@ -754,6 +794,7 @@
           setSessionCode(code);
           setSessionState('hosting');
           setMyRole('commander');
+          requestWakeLock(); // Keep screen on
           // Commander starts with command net and all channels listen enabled
           const initialStates = { [COMMAND_NET_ID]: { listen: true, speak: false } };
           teams.forEach(t => { initialStates[t.id] = { listen: true, speak: false }; });
@@ -800,6 +841,7 @@
           setSessionCode(code);
           setSessionState('joined');
           setMyRole('operator');
+          requestWakeLock(); // Keep screen on
           setConnectedUsers([{ peerId: peer.id, username: username, status: 'standby', speaking: false, speakingChannels: [], channelId: null, role: 'operator' }]);
         } catch (err) { setError(err.message); }
       };
@@ -830,6 +872,7 @@
         setChannelStates({});
         setAllCallActive(false);
         isHostRef.current = false;
+        releaseWakeLock(); // Allow screen to sleep again
       };
 
       // Handle being kicked
@@ -1153,6 +1196,7 @@
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px', justifyContent: isMobile ? 'center' : 'flex-start' }}>
                         <span style={{ fontSize: isMobile ? '16px' : '18px', letterSpacing: '4px', color: '#00ff66', fontWeight: '600' }}>{sessionCode}</span>
                         <button onClick={copyCode} style={{ background: 'rgba(0,255,100,0.1)', border: '1px solid rgba(0,255,100,0.3)', borderRadius: '4px', color: '#00ff66', padding: '6px 10px', fontSize: '9px', cursor: 'pointer', fontFamily: 'inherit' }}>COPY</button>
+                        {wakeLockActive && <span title="Screen will stay on" style={{ fontSize: '12px' }}>☀️</span>}
                       </div>
                     </div>
                     {!isMobile && <div style={{ width: '1px', height: '35px', background: 'rgba(0,255,100,0.2)' }} />}
