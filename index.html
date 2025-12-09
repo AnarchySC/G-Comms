@@ -82,7 +82,7 @@
       const analyserRef = useRef(null);
       const animationRef = useRef(null);
       const isHostRef = useRef(false);
-      const gainNodesRef = useRef(new Map());
+      const audioElementsRef = useRef(new Map()); // peerId -> Audio element
       const teamsRef = useRef(teams);
       const myStatusRef = useRef(myStatus);
       const myChannelIdRef = useRef(myChannelId);
@@ -140,53 +140,57 @@
         }
       };
 
-      // Update audio routing
+      // Update audio routing - determines who we hear
       const updateAudioRouting = useCallback(() => {
-        if (!audioContextRef.current) return;
+        console.log('Updating audio routing, users:', connectedUsersRef.current.length);
         
         connectedUsersRef.current.forEach(user => {
           if (user.peerId === peerRef.current?.id) return;
           
-          const gainNode = gainNodesRef.current.get(user.peerId);
-          if (!gainNode) return;
+          const audioEl = audioElementsRef.current.get(user.peerId);
+          if (!audioEl) {
+            console.log('No audio element for', user.username);
+            return;
+          }
           
           let shouldHear = false;
+          let volume = 0.8;
           
           // Check if we should hear this user based on their speaking channels and our listening channels
           if (user.speaking && user.speakingChannels && user.speakingChannels.length > 0) {
+            console.log(user.username, 'is speaking on channels:', user.speakingChannels);
+            console.log('My channel states:', channelStatesRef.current);
+            
             for (const speakingCh of user.speakingChannels) {
-              const chKey = String(speakingCh);
-              const chState = channelStatesRef.current[speakingCh] || channelStatesRef.current[chKey];
+              // Check both string and number versions of channel ID
+              const chState = channelStatesRef.current[speakingCh] || channelStatesRef.current[String(speakingCh)];
+              console.log('Checking channel', speakingCh, 'state:', chState);
+              
               if (chState?.listen) {
                 shouldHear = true;
+                // Get volume for this channel
+                if (speakingCh === COMMAND_NET_ID) {
+                  volume = commandNetVolume / 100;
+                } else {
+                  const team = teamsRef.current.find(t => t.id === speakingCh || t.id === parseInt(speakingCh));
+                  if (team) volume = team.volume / 100;
+                }
                 break;
               }
             }
           }
           
-          // Get volume for the channel (use first matching channel's volume)
-          let volume = 0.8;
-          if (shouldHear && user.speakingChannels) {
-            for (const ch of user.speakingChannels) {
-              if (ch === COMMAND_NET_ID) {
-                volume = commandNetVolume / 100;
-                break;
-              }
-              const team = teamsRef.current.find(t => t.id === ch);
-              if (team) {
-                volume = team.volume / 100;
-                break;
-              }
-            }
-          }
+          if (globalMute) shouldHear = false;
           
-          gainNode.gain.value = (shouldHear && !globalMute) ? volume : 0;
+          console.log('Should hear', user.username, ':', shouldHear, 'volume:', volume);
+          audioEl.muted = !shouldHear;
+          audioEl.volume = volume;
         });
       }, [globalMute, commandNetVolume]);
 
       useEffect(() => {
         updateAudioRouting();
-      }, [connectedUsers, channelStates, globalMute, updateAudioRouting]);
+      }, [connectedUsers, channelStates, globalMute, teams, updateAudioRouting]);
 
       const broadcastStatus = useCallback((newStatus) => {
         setMyStatus(newStatus);
@@ -198,6 +202,7 @@
       }, []);
 
       const broadcastSpeakingState = useCallback((speakingChannels) => {
+        console.log('Broadcasting speaking state, channels:', speakingChannels);
         connectionsRef.current.forEach((connData) => {
           if (connData.conn?.open) {
             connData.conn.send({ 
@@ -445,10 +450,11 @@
         } else if (data.type === 'status-update') {
           setConnectedUsers(prev => prev.map(u => u.peerId === data.peerId ? { ...u, status: data.status } : u));
         } else if (data.type === 'speaking-update') {
+          console.log('Received speaking update:', data.peerId, 'speaking:', data.speaking, 'channels:', data.speakingChannels);
           setConnectedUsers(prev => prev.map(u => u.peerId === data.peerId ? { 
             ...u, 
             speaking: data.speaking,
-            speakingChannels: data.speakingChannels
+            speakingChannels: data.speakingChannels || []
           } : u));
         } else if (data.type === 'role-update') {
           setConnectedUsers(prev => prev.map(u => u.peerId === data.peerId ? { ...u, role: data.role } : u));
@@ -581,7 +587,12 @@
         conn.on('data', (data) => handleData(data, conn.peer));
         conn.on('close', () => {
           console.log('Connection closed:', conn.peer);
-          gainNodesRef.current.delete(conn.peer);
+          const audioEl = audioElementsRef.current.get(conn.peer);
+          if (audioEl) {
+            audioEl.srcObject = null;
+            audioEl.remove();
+            audioElementsRef.current.delete(conn.peer);
+          }
           connectionsRef.current.delete(conn.peer);
           setConnectedUsers(prev => prev.filter(u => u.peerId !== conn.peer));
         });
@@ -589,22 +600,28 @@
 
       const setupCall = useCallback((call) => {
         call.on('stream', (remoteStream) => {
-          console.log('Got stream from:', call.peer);
+          console.log('Got audio stream from:', call.peer);
           
-          if (!audioContextRef.current) {
-            audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+          // Create or get audio element for this peer
+          let audioEl = audioElementsRef.current.get(call.peer);
+          if (!audioEl) {
+            audioEl = new Audio();
+            audioEl.autoplay = true;
+            audioEl.muted = true; // Start muted, updateAudioRouting will unmute if needed
+            audioElementsRef.current.set(call.peer, audioEl);
           }
           
-          const source = audioContextRef.current.createMediaStreamSource(remoteStream);
-          const gainNode = audioContextRef.current.createGain();
-          gainNode.gain.value = 0;
-          source.connect(gainNode);
-          gainNode.connect(audioContextRef.current.destination);
+          audioEl.srcObject = remoteStream;
+          audioEl.play().catch(e => console.log('Audio play error:', e));
           
-          gainNodesRef.current.set(call.peer, gainNode);
           connectionsRef.current.set(call.peer, { ...connectionsRef.current.get(call.peer), stream: remoteStream });
           
+          // Trigger routing update after a short delay
           setTimeout(() => updateAudioRouting(), 100);
+        });
+        
+        call.on('error', (err) => {
+          console.error('Call error:', err);
         });
       }, [updateAudioRouting]);
 
@@ -673,7 +690,12 @@
           }
         });
         connectionsRef.current.clear();
-        gainNodesRef.current.clear();
+        // Clean up audio elements
+        audioElementsRef.current.forEach(audioEl => {
+          audioEl.srcObject = null;
+          audioEl.remove();
+        });
+        audioElementsRef.current.clear();
         if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(track => track.stop()); localStreamRef.current = null; }
         if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
         setSessionState('lobby');
