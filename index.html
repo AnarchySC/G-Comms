@@ -60,7 +60,8 @@
       border: none;
       box-shadow: 0 0 10px rgba(0,255,100,0.5);
     }
-    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.7; transform: scale(1.1); } }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+    @keyframes pulseGlow { 0%, 100% { box-shadow: 0 0 10px currentColor; } 50% { box-shadow: 0 0 20px currentColor; } }
     @keyframes glow { 0%, 100% { box-shadow: 0 0 20px rgba(0,255,100,0.2); } 50% { box-shadow: 0 0 30px rgba(0,255,100,0.4); } }
     @keyframes flashAlert { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
     @keyframes soundWave { 0%, 100% { height: 4px; } 50% { height: 16px; } }
@@ -951,14 +952,14 @@
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: isMobile ? '100%' : 'auto', justifyContent: isMobile ? 'stretch' : 'flex-end' }}>
                 <button
-                  onClick={(e) => { e.stopPropagation(); toggleChannelListen(channelId); }}
-                  style={{ flex: isMobile ? 1 : 'none', padding: isMobile ? '14px 12px' : '8px 12px', background: channelState.listen ? `${channelColor}33` : 'rgba(0,0,0,0.3)', border: `1px solid ${channelState.listen ? channelColor : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: channelState.listen ? channelColor : '#666', fontSize: isMobile ? '13px' : '11px', cursor: 'pointer', fontFamily: 'inherit' }}
+                  onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); toggleChannelListen(channelId); }}
+                  style={{ flex: isMobile ? 1 : 'none', padding: isMobile ? '14px 12px' : '8px 12px', background: channelState.listen ? `${channelColor}33` : 'rgba(0,0,0,0.3)', border: `1px solid ${channelState.listen ? channelColor : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: channelState.listen ? channelColor : '#666', fontSize: isMobile ? '13px' : '11px', cursor: 'pointer', fontFamily: 'inherit', touchAction: 'manipulation', userSelect: 'none', WebkitUserSelect: 'none' }}
                 >
                   🎧 {channelState.listen ? 'ON' : 'OFF'}
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); toggleChannelSpeak(channelId); }}
-                  style={{ flex: isMobile ? 1 : 'none', padding: isMobile ? '14px 12px' : '8px 12px', background: channelState.speak ? `${channelColor}33` : 'rgba(0,0,0,0.3)', border: `1px solid ${channelState.speak ? channelColor : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: channelState.speak ? channelColor : '#666', fontSize: isMobile ? '13px' : '11px', cursor: 'pointer', fontFamily: 'inherit', animation: channelState.speak ? 'pulse 1s infinite' : 'none' }}
+                  onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); toggleChannelSpeak(channelId); }}
+                  style={{ flex: isMobile ? 1 : 'none', padding: isMobile ? '14px 12px' : '8px 12px', background: channelState.speak ? `${channelColor}33` : 'rgba(0,0,0,0.3)', border: `1px solid ${channelState.speak ? channelColor : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: channelState.speak ? channelColor : '#666', fontSize: isMobile ? '13px' : '11px', cursor: 'pointer', fontFamily: 'inherit', animation: channelState.speak ? 'pulseGlow 1s infinite' : 'none', touchAction: 'manipulation', userSelect: 'none', WebkitUserSelect: 'none' }}
                 >
                   🎙️ {channelState.speak ? 'TX' : 'OFF'}
                 </button>
@@ -1179,7 +1180,7 @@
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '8px', justifyContent: isMobile ? 'center' : 'flex-end' }}>
-                    <button onClick={() => setGlobalMute(!globalMute)} style={{ background: globalMute ? 'rgba(255,50,50,0.2)' : 'rgba(0,255,100,0.1)', border: `1px solid ${globalMute ? 'rgba(255,50,50,0.5)' : 'rgba(0,255,100,0.3)'}`, borderRadius: '6px', color: globalMute ? '#ff6666' : '#00ff66', padding: isMobile ? '12px 16px' : '8px 12px', fontSize: '16px', cursor: 'pointer' }}>{globalMute ? '🔇' : '🔊'}</button>
+                    <button onPointerDown={(e) => { e.preventDefault(); setGlobalMute(!globalMute); }} style={{ background: globalMute ? 'rgba(255,50,50,0.2)' : 'rgba(0,255,100,0.1)', border: `1px solid ${globalMute ? 'rgba(255,50,50,0.5)' : 'rgba(0,255,100,0.3)'}`, borderRadius: '6px', color: globalMute ? '#ff6666' : '#00ff66', padding: isMobile ? '12px 16px' : '8px 12px', fontSize: '16px', cursor: 'pointer', touchAction: 'manipulation', userSelect: 'none', WebkitUserSelect: 'none' }}>{globalMute ? '🔇' : '🔊'}</button>
                     <button onClick={leaveSession} style={{ background: 'rgba(255,50,50,0.1)', border: '1px solid rgba(255,50,50,0.3)', borderRadius: '6px', color: '#ff6666', padding: isMobile ? '12px 18px' : '8px 14px', fontSize: '10px', letterSpacing: '2px', cursor: 'pointer', fontFamily: 'inherit' }}>LEAVE</button>
                   </div>
                 </div>
@@ -1187,9 +1188,9 @@
                 {/* Signals */}
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '15px', padding: isMobile ? '12px' : '15px', background: 'rgba(0,20,0,0.4)', border: '1px solid rgba(255,200,0,0.2)', borderRadius: '10px', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: '10px', letterSpacing: '2px', color: '#aa9944', display: 'flex', alignItems: 'center', marginRight: '5px', width: isMobile ? '100%' : 'auto', justifyContent: isMobile ? 'center' : 'flex-start', marginBottom: isMobile ? '8px' : '0' }}>SIGNALS</span>
-                  <button onClick={() => broadcastWhistle('attention')} style={{ flex: 1, minWidth: isMobile ? '30%' : '100px', padding: isMobile ? '14px 10px' : '10px 15px', background: 'rgba(255,200,0,0.1)', border: '1px solid rgba(255,200,0,0.4)', borderRadius: '6px', color: '#ffcc00', fontSize: isMobile ? '10px' : '11px', cursor: 'pointer', fontFamily: 'inherit' }}>📯 ATTN</button>
-                  <button onClick={() => broadcastWhistle('alert')} style={{ flex: 1, minWidth: isMobile ? '30%' : '100px', padding: isMobile ? '14px 10px' : '10px 15px', background: 'rgba(255,150,0,0.1)', border: '1px solid rgba(255,150,0,0.4)', borderRadius: '6px', color: '#ff9900', fontSize: isMobile ? '10px' : '11px', cursor: 'pointer', fontFamily: 'inherit' }}>🔔 ALERT</button>
-                  <button onClick={() => broadcastWhistle('urgent')} style={{ flex: 1, minWidth: isMobile ? '30%' : '100px', padding: isMobile ? '14px 10px' : '10px 15px', background: 'rgba(255,80,80,0.1)', border: '1px solid rgba(255,80,80,0.4)', borderRadius: '6px', color: '#ff6666', fontSize: isMobile ? '10px' : '11px', cursor: 'pointer', fontFamily: 'inherit' }}>⚠️ URGENT</button>
+                  <button onPointerDown={(e) => { e.preventDefault(); broadcastWhistle('attention'); }} style={{ flex: 1, minWidth: isMobile ? '30%' : '100px', padding: isMobile ? '14px 10px' : '10px 15px', background: 'rgba(255,200,0,0.1)', border: '1px solid rgba(255,200,0,0.4)', borderRadius: '6px', color: '#ffcc00', fontSize: isMobile ? '10px' : '11px', cursor: 'pointer', fontFamily: 'inherit', touchAction: 'manipulation', userSelect: 'none', WebkitUserSelect: 'none' }}>📯 ATTN</button>
+                  <button onPointerDown={(e) => { e.preventDefault(); broadcastWhistle('alert'); }} style={{ flex: 1, minWidth: isMobile ? '30%' : '100px', padding: isMobile ? '14px 10px' : '10px 15px', background: 'rgba(255,150,0,0.1)', border: '1px solid rgba(255,150,0,0.4)', borderRadius: '6px', color: '#ff9900', fontSize: isMobile ? '10px' : '11px', cursor: 'pointer', fontFamily: 'inherit', touchAction: 'manipulation', userSelect: 'none', WebkitUserSelect: 'none' }}>🔔 ALERT</button>
+                  <button onPointerDown={(e) => { e.preventDefault(); broadcastWhistle('urgent'); }} style={{ flex: 1, minWidth: isMobile ? '30%' : '100px', padding: isMobile ? '14px 10px' : '10px 15px', background: 'rgba(255,80,80,0.1)', border: '1px solid rgba(255,80,80,0.4)', borderRadius: '6px', color: '#ff6666', fontSize: isMobile ? '10px' : '11px', cursor: 'pointer', fontFamily: 'inherit', touchAction: 'manipulation', userSelect: 'none', WebkitUserSelect: 'none' }}>⚠️ URGENT</button>
                 </div>
 
                 {/* ALL-CALL Panel (Commander only) */}
@@ -1201,7 +1202,7 @@
                         {!isMobile && <div style={{ fontSize: '9px', color: '#5a7a5a', marginTop: '4px' }}>Ctrl+0: All-Call to ALL squads simultaneously</div>}
                       </div>
                       <button 
-                        onClick={() => setAllCallActive(!allCallActive)}
+                        onPointerDown={(e) => { e.preventDefault(); setAllCallActive(!allCallActive); }}
                         style={{ 
                           padding: isMobile ? '16px 32px' : '12px 24px', 
                           background: allCallActive ? 'rgba(255,50,50,0.3)' : 'rgba(255,50,50,0.1)', 
@@ -1214,7 +1215,10 @@
                           cursor: 'pointer', 
                           fontFamily: 'inherit',
                           animation: allCallActive ? 'pulse 0.5s infinite' : 'none',
-                          width: isMobile ? '100%' : 'auto'
+                          width: isMobile ? '100%' : 'auto',
+                          touchAction: 'manipulation',
+                          userSelect: 'none',
+                          WebkitUserSelect: 'none'
                         }}
                       >
                         📢 ALL-CALL {allCallActive ? 'ACTIVE' : 'OFF'}
@@ -1248,10 +1252,10 @@
                   <div style={{ marginBottom: '15px', padding: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: '8px' }}>
                     <div style={{ fontSize: '9px', color: '#5a7a5a', textAlign: 'center', marginBottom: '10px' }}>SET STATUS</div>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
-                      <button onClick={() => broadcastStatus('ready')} style={{ padding: '12px 16px', background: myStatus === 'ready' ? 'rgba(0,255,100,0.2)' : 'rgba(0,0,0,0.3)', border: `1px solid ${myStatus === 'ready' ? '#00ff66' : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: '#00ff66', fontSize: '11px', fontFamily: 'inherit' }}>🟢 READY</button>
-                      <button onClick={() => broadcastStatus('wait')} style={{ padding: '12px 16px', background: myStatus === 'wait' ? 'rgba(255,170,0,0.2)' : 'rgba(0,0,0,0.3)', border: `1px solid ${myStatus === 'wait' ? '#ffaa00' : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: '#ffaa00', fontSize: '11px', fontFamily: 'inherit' }}>🟡 WAIT</button>
-                      <button onClick={() => broadcastStatus('dead')} style={{ padding: '12px 16px', background: myStatus === 'dead' ? 'rgba(255,50,50,0.2)' : 'rgba(0,0,0,0.3)', border: `1px solid ${myStatus === 'dead' ? '#ff4444' : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: '#ff4444', fontSize: '11px', fontFamily: 'inherit' }}>🔴 DOWN</button>
-                      <button onClick={() => broadcastStatus('standby')} style={{ padding: '12px 16px', background: myStatus === 'standby' ? 'rgba(100,100,100,0.2)' : 'rgba(0,0,0,0.3)', border: `1px solid ${myStatus === 'standby' ? '#666' : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: '#888', fontSize: '11px', fontFamily: 'inherit' }}>⚫ STANDBY</button>
+                      <button onPointerDown={(e) => { e.preventDefault(); broadcastStatus('ready'); }} style={{ padding: '12px 16px', background: myStatus === 'ready' ? 'rgba(0,255,100,0.2)' : 'rgba(0,0,0,0.3)', border: `1px solid ${myStatus === 'ready' ? '#00ff66' : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: '#00ff66', fontSize: '11px', fontFamily: 'inherit', touchAction: 'manipulation', userSelect: 'none', WebkitUserSelect: 'none' }}>🟢 READY</button>
+                      <button onPointerDown={(e) => { e.preventDefault(); broadcastStatus('wait'); }} style={{ padding: '12px 16px', background: myStatus === 'wait' ? 'rgba(255,170,0,0.2)' : 'rgba(0,0,0,0.3)', border: `1px solid ${myStatus === 'wait' ? '#ffaa00' : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: '#ffaa00', fontSize: '11px', fontFamily: 'inherit', touchAction: 'manipulation', userSelect: 'none', WebkitUserSelect: 'none' }}>🟡 WAIT</button>
+                      <button onPointerDown={(e) => { e.preventDefault(); broadcastStatus('dead'); }} style={{ padding: '12px 16px', background: myStatus === 'dead' ? 'rgba(255,50,50,0.2)' : 'rgba(0,0,0,0.3)', border: `1px solid ${myStatus === 'dead' ? '#ff4444' : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: '#ff4444', fontSize: '11px', fontFamily: 'inherit', touchAction: 'manipulation', userSelect: 'none', WebkitUserSelect: 'none' }}>🔴 DOWN</button>
+                      <button onPointerDown={(e) => { e.preventDefault(); broadcastStatus('standby'); }} style={{ padding: '12px 16px', background: myStatus === 'standby' ? 'rgba(100,100,100,0.2)' : 'rgba(0,0,0,0.3)', border: `1px solid ${myStatus === 'standby' ? '#666' : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: '#888', fontSize: '11px', fontFamily: 'inherit', touchAction: 'manipulation', userSelect: 'none', WebkitUserSelect: 'none' }}>⚫ STANDBY</button>
                     </div>
                   </div>
                 ) : (
