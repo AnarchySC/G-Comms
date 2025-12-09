@@ -123,8 +123,13 @@
       const [selectedUserForAssign, setSelectedUserForAssign] = useState(null); // Mobile: tap user then tap channel
       const [wasKicked, setWasKicked] = useState(false);
       const [wakeLockActive, setWakeLockActive] = useState(false);
+      const [connectionHealth, setConnectionHealth] = useState('good'); // good, degraded, reconnecting
+      const [reconnectAttempts, setReconnectAttempts] = useState(0);
       
       const peerRef = useRef(null);
+      const reconnectTimeoutRef = useRef(null);
+      const heartbeatIntervalRef = useRef(null);
+      const lastHeartbeatRef = useRef(new Map()); // peerId -> timestamp
       const connectionsRef = useRef(new Map());
       const localStreamRef = useRef(null);
       const audioContextRef = useRef(null);
@@ -524,12 +529,62 @@
 
       const initPeer = useCallback((peerId) => {
         return new Promise((resolve, reject) => {
-          const peer = new Peer(peerId, { debug: 1 });
-          peer.on('open', (id) => { console.log('Connected:', id); resolve(peer); });
+          const peer = new Peer(peerId, { 
+            debug: 1,
+            config: {
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' },
+                // Free TURN servers from Open Relay (metered.ca)
+                {
+                  urls: 'turn:a.relay.metered.ca:80',
+                  username: 'e8dd65caa142a36b1f4b0a99',
+                  credential: 'kIcSIx5h3xf3AoHn'
+                },
+                {
+                  urls: 'turn:a.relay.metered.ca:80?transport=tcp',
+                  username: 'e8dd65caa142a36b1f4b0a99',
+                  credential: 'kIcSIx5h3xf3AoHn'
+                },
+                {
+                  urls: 'turn:a.relay.metered.ca:443',
+                  username: 'e8dd65caa142a36b1f4b0a99',
+                  credential: 'kIcSIx5h3xf3AoHn'
+                },
+                {
+                  urls: 'turn:a.relay.metered.ca:443?transport=tcp',
+                  username: 'e8dd65caa142a36b1f4b0a99',
+                  credential: 'kIcSIx5h3xf3AoHn'
+                }
+              ],
+              iceCandidatePoolSize: 10
+            }
+          });
+          peer.on('open', (id) => { 
+            console.log('Connected:', id); 
+            setConnectionHealth('good');
+            setReconnectAttempts(0);
+            resolve(peer); 
+          });
           peer.on('error', (err) => {
+            console.error('Peer error:', err.type, err);
             if (err.type === 'unavailable-id') reject(new Error('Session code already in use'));
             else if (err.type === 'peer-unavailable') reject(new Error('Session not found'));
+            else if (err.type === 'disconnected' || err.type === 'network') {
+              setConnectionHealth('reconnecting');
+              // Will be handled by reconnection logic
+            }
             else reject(err);
+          });
+          peer.on('disconnected', () => {
+            console.log('Peer disconnected, attempting reconnect...');
+            setConnectionHealth('reconnecting');
+            if (!peer.destroyed) {
+              peer.reconnect();
+            }
           });
           peerRef.current = peer;
         });
@@ -539,7 +594,16 @@
         if (!localStreamRef.current) {
           try {
             const stream = await navigator.mediaDevices.getUserMedia({ 
-              audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+              audio: { 
+                echoCancellation: true, 
+                noiseSuppression: true, 
+                autoGainControl: true,
+                channelCount: 1,           // Mono - half bandwidth
+                sampleRate: 24000,         // Voice optimized (better than 16k, lighter than 48k)
+                latency: 0,                // Request lowest latency
+                googHighpassFilter: true,  // Chrome-specific: filter low rumble
+                googTypingNoiseDetection: true
+              } 
             });
             localStreamRef.current = stream;
             audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
@@ -591,6 +655,19 @@
 
       const handleData = useCallback((data, fromPeerId) => {
         console.log('Received:', data.type, 'from:', fromPeerId);
+        
+        // Update heartbeat timestamp
+        if (data.type === 'heartbeat' || data.type === 'heartbeat-ack') {
+          lastHeartbeatRef.current.set(fromPeerId, Date.now());
+          if (data.type === 'heartbeat') {
+            // Respond to heartbeat
+            const conn = connectionsRef.current.get(fromPeerId)?.conn;
+            if (conn?.open) {
+              conn.send({ type: 'heartbeat-ack', timestamp: data.timestamp });
+            }
+          }
+          return;
+        }
         
         if (data.type === 'whistle') {
           playWhistle(data.whistleType);
@@ -740,7 +817,15 @@
             audioElementsRef.current.delete(conn.peer);
           }
           connectionsRef.current.delete(conn.peer);
+          lastHeartbeatRef.current.delete(conn.peer);
           setConnectedUsers(prev => prev.filter(u => u.peerId !== conn.peer));
+          
+          // Auto-reconnect for non-host peers who lost connection to host
+          if (!isHostRef.current && conn.peer.includes('-host') && sessionState !== 'lobby') {
+            console.log('Lost connection to host, attempting reconnect...');
+            setConnectionHealth('reconnecting');
+            attemptReconnect();
+          }
         });
       }, [username, getLocalStream, handleData]);
 
@@ -847,6 +932,11 @@
       };
 
       const leaveSession = () => {
+        // Clear reconnect timeout if leaving intentionally
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+          reconnectTimeoutRef.current = null;
+        }
         connectionsRef.current.forEach((connData) => {
           if (connData.conn?.open) {
             connData.conn.send({ type: 'user-left', peerId: peerRef.current?.id });
@@ -855,6 +945,7 @@
         });
         connectionsRef.current.clear();
         gainNodesRef.current.clear();
+        lastHeartbeatRef.current.clear();
         // Clean up audio elements
         audioElementsRef.current.forEach(audioEl => {
           audioEl.srcObject = null;
@@ -871,9 +962,66 @@
         setMyStatus('standby');
         setChannelStates({});
         setAllCallActive(false);
+        setConnectionHealth('good');
+        setReconnectAttempts(0);
         isHostRef.current = false;
         releaseWakeLock(); // Allow screen to sleep again
+        // Clear any pending heartbeat intervals
+        if (heartbeatIntervalRef.current) {
+          clearInterval(heartbeatIntervalRef.current);
+          heartbeatIntervalRef.current = null;
+        }
       };
+
+      // Auto-reconnect with exponential backoff
+      const attemptReconnect = useCallback(async () => {
+        const maxAttempts = 5;
+        const currentAttempt = reconnectAttempts + 1;
+        
+        if (currentAttempt > maxAttempts) {
+          console.log('Max reconnect attempts reached');
+          setError('Connection lost. Please rejoin the session.');
+          setConnectionHealth('good');
+          setSessionState('lobby');
+          return;
+        }
+        
+        setReconnectAttempts(currentAttempt);
+        const backoffMs = Math.min(1000 * Math.pow(2, currentAttempt - 1), 10000); // 1s, 2s, 4s, 8s, 10s
+        console.log(`Reconnect attempt ${currentAttempt}/${maxAttempts} in ${backoffMs}ms`);
+        
+        reconnectTimeoutRef.current = setTimeout(async () => {
+          try {
+            const hostPeerId = `gcomms-${sessionCode}-host`;
+            const conn = peerRef.current.connect(hostPeerId, { reliable: true });
+            
+            conn.on('open', () => {
+              console.log('Reconnected to host!');
+              setConnectionHealth('good');
+              setReconnectAttempts(0);
+              setupConnection(conn);
+            });
+            
+            conn.on('error', (err) => {
+              console.log('Reconnect failed:', err);
+              attemptReconnect();
+            });
+            
+            // Timeout for this attempt
+            setTimeout(() => {
+              if (!conn.open) {
+                console.log('Reconnect attempt timed out');
+                conn.close();
+                attemptReconnect();
+              }
+            }, 5000);
+            
+          } catch (err) {
+            console.log('Reconnect error:', err);
+            attemptReconnect();
+          }
+        }, backoffMs);
+      }, [reconnectAttempts, sessionCode, setupConnection]);
 
       // Handle being kicked
       useEffect(() => {
@@ -883,6 +1031,42 @@
           setWasKicked(false);
         }
       }, [wasKicked]);
+
+      // Heartbeat system for connection health monitoring
+      useEffect(() => {
+        if (sessionState === 'lobby') return;
+        
+        // Send heartbeat every 3 seconds
+        heartbeatIntervalRef.current = setInterval(() => {
+          const now = Date.now();
+          connectionsRef.current.forEach((connData, peerId) => {
+            if (connData.conn?.open) {
+              connData.conn.send({ type: 'heartbeat', timestamp: now });
+            }
+          });
+          
+          // Check for stale connections (no heartbeat in 10 seconds)
+          let hasStaleConnection = false;
+          lastHeartbeatRef.current.forEach((timestamp, peerId) => {
+            if (now - timestamp > 10000) {
+              hasStaleConnection = true;
+              console.log('Stale connection detected:', peerId);
+            }
+          });
+          
+          if (hasStaleConnection && connectionHealth === 'good') {
+            setConnectionHealth('degraded');
+          } else if (!hasStaleConnection && connectionHealth === 'degraded') {
+            setConnectionHealth('good');
+          }
+        }, 3000);
+        
+        return () => {
+          if (heartbeatIntervalRef.current) {
+            clearInterval(heartbeatIntervalRef.current);
+          }
+        };
+      }, [sessionState, connectionHealth]);
 
       const syncTeams = (newTeams) => {
         if (isHostRef.current) {
@@ -977,10 +1161,11 @@
             }}
           >
             {isMobile && selectedUserForAssign && !isCommandNet && myRole === 'commander' && (
-              <div style={{ background: 'rgba(0,255,100,0.2)', padding: '10px', borderRadius: '6px', marginBottom: '12px', textAlign: 'center', fontSize: '11px', color: '#00ff66' }}>
-                TAP TO ASSIGN {selectedUserForAssign.username.toUpperCase()}
+              <div style={{ background: 'rgba(0,255,100,0.2)', border: '1px solid rgba(0,255,100,0.4)', borderRadius: '6px', padding: '10px', marginBottom: '12px', textAlign: 'center', fontSize: '11px', color: '#00ff66' }}>
+                TAP TO MOVE {selectedUserForAssign.username.toUpperCase()} HERE
               </div>
             )}
+            
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', flexWrap: isMobile ? 'wrap' : 'nowrap', gap: '10px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <div style={{ width: '16px', height: '16px', borderRadius: '50%', background: channelColor, boxShadow: `0 0 10px ${channelColor}66` }} />
@@ -1038,55 +1223,121 @@
                   {isCommandNet ? 'No leadership online' : (isHostRef.current ? (isMobile ? 'Tap to assign users' : 'Drag operators here') : 'No operators')}
                 </div>
               ) : (
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                   {channelUsers.map(user => {
                     const status = statusConfig[user.status || 'standby'];
                     const role = roleConfig[user.role || 'operator'];
                     const isSpeakingHere = user.speaking && user.speakingChannels?.includes(channelId);
+                    const isMe = user.peerId === peerRef.current?.id;
+                    const canManage = isHostRef.current && !user.isHost && !isCommandNet;
+                    
                     return (
                       <div
                         key={user.peerId}
-                        draggable={isHostRef.current && !user.isHost && !isCommandNet && !isMobile}
+                        draggable={canManage && !isMobile}
                         onDragStart={(e) => !isMobile && handleDragStart(e, user)}
                         onDragEnd={() => setDraggedUser(null)}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (isMobile && isHostRef.current && !user.isHost && !isCommandNet) {
-                            setSelectedUserForAssign(selectedUserForAssign?.peerId === user.peerId ? null : user);
-                          }
-                        }}
-                        className={isHostRef.current && !user.isHost && !isCommandNet && !isMobile ? 'user-chip' : ''}
+                        className={canManage && !isMobile ? 'user-chip' : ''}
                         style={{ 
                           display: 'flex', 
-                          alignItems: 'center', 
-                          gap: '8px', 
-                          padding: isMobile ? '12px 14px' : '8px 12px', 
+                          flexDirection: 'column',
+                          gap: '8px',
+                          padding: isMobile ? '14px 16px' : '12px 14px', 
                           background: isSpeakingHere ? 'rgba(0,255,100,0.2)' : (selectedUserForAssign?.peerId === user.peerId ? 'rgba(0,255,100,0.15)' : 'rgba(0,0,0,0.4)'), 
-                          border: `1px solid ${isSpeakingHere ? 'rgba(0,255,100,0.5)' : (selectedUserForAssign?.peerId === user.peerId ? '#00ff66' : 'rgba(255,255,255,0.1)')}`, 
-                          borderRadius: '6px'
+                          border: `2px solid ${isSpeakingHere ? 'rgba(0,255,100,0.5)' : (selectedUserForAssign?.peerId === user.peerId ? '#00ff66' : 'rgba(255,255,255,0.15)')}`, 
+                          borderRadius: '8px',
+                          minWidth: isMobile ? '140px' : '160px'
                         }}
                       >
-                        <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: status.color, boxShadow: `0 0 6px ${status.color}`, animation: isSpeakingHere ? 'pulse 0.5s infinite' : 'none' }} />
-                        <div>
-                          <div style={{ fontSize: isMobile ? '12px' : '11px', color: user.peerId === peerRef.current?.id ? '#00ff66' : '#e0ffe0', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <span style={{ color: role.color }}>{role.icon}</span>
-                            {user.username.toUpperCase()}
-                            {user.peerId === peerRef.current?.id && <span style={{ fontSize: '9px', color: '#5a8a5a' }}>(YOU)</span>}
+                        {/* User info row */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <div style={{ width: isMobile ? '12px' : '10px', height: isMobile ? '12px' : '10px', borderRadius: '50%', background: status.color, boxShadow: `0 0 8px ${status.color}`, animation: isSpeakingHere ? 'pulse 0.5s infinite' : 'none', flexShrink: 0 }} />
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: isMobile ? '14px' : '13px', fontWeight: '500', color: isMe ? '#00ff66' : '#e0ffe0', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <span style={{ color: role.color }}>{role.icon}</span>
+                              {user.username.toUpperCase()}
+                              {isMe && <span style={{ fontSize: '9px', color: '#5a8a5a', fontWeight: '400' }}>(YOU)</span>}
+                            </div>
                           </div>
-                          {isHostRef.current && !user.isHost && !isCommandNet && !isMobile && (
-                            <div style={{ fontSize: '8px', marginTop: '2px', display: 'flex', gap: '8px' }}>
-                              {user.role === 'squadleader' ? (
-                                <span onClick={(e) => { e.stopPropagation(); demoteToOperator(user.peerId); }} style={{ color: '#ff6666', cursor: 'pointer' }}>DEMOTE</span>
-                              ) : (
-                                <span onClick={(e) => { e.stopPropagation(); promoteToSquadLeader(user.peerId); }} style={{ color: '#4ecdc4', cursor: 'pointer' }}>→ SL</span>
-                              )}
-                              <span onClick={(e) => { e.stopPropagation(); kickUser(user.peerId, user.username); }} style={{ color: '#ff4444', cursor: 'pointer' }}>KICK</span>
+                          {isSpeakingHere && (
+                            <div style={{ display: 'flex', gap: '2px', alignItems: 'flex-end', height: '14px' }}>
+                              {[1,2,3].map(i => (<div key={i} style={{ width: '3px', background: '#00ff66', borderRadius: '1px', animation: 'soundWave 0.5s infinite', animationDelay: `${i*0.1}s` }} />))}
                             </div>
                           )}
                         </div>
-                        {isSpeakingHere && (
-                          <div style={{ display: 'flex', gap: '2px', alignItems: 'flex-end', height: '12px' }}>
-                            {[1,2,3].map(i => (<div key={i} style={{ width: '2px', background: '#00ff66', borderRadius: '1px', animation: 'soundWave 0.5s infinite', animationDelay: `${i*0.1}s` }} />))}
+                        
+                        {/* Action buttons for commander - now on both desktop and mobile */}
+                        {canManage && (
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            {isMobile && (
+                              <button
+                                onPointerDown={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setSelectedUserForAssign(selectedUserForAssign?.peerId === user.peerId ? null : user);
+                                }}
+                                style={{
+                                  padding: '10px 8px',
+                                  background: selectedUserForAssign?.peerId === user.peerId ? 'rgba(0,255,100,0.2)' : 'rgba(0,255,100,0.1)',
+                                  border: `1px solid ${selectedUserForAssign?.peerId === user.peerId ? '#00ff66' : 'rgba(0,255,100,0.4)'}`,
+                                  borderRadius: '4px',
+                                  color: '#00ff66',
+                                  fontSize: '11px',
+                                  fontFamily: 'inherit',
+                                  cursor: 'pointer',
+                                  touchAction: 'manipulation',
+                                  userSelect: 'none',
+                                  WebkitUserSelect: 'none'
+                                }}
+                              >
+                                {selectedUserForAssign?.peerId === user.peerId ? '✓' : '↔'}
+                              </button>
+                            )}
+                            <button
+                              onPointerDown={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                user.role === 'squadleader' ? demoteToOperator(user.peerId) : promoteToSquadLeader(user.peerId);
+                              }}
+                              style={{
+                                flex: 1,
+                                padding: isMobile ? '10px 8px' : '8px 10px',
+                                background: user.role === 'squadleader' ? 'rgba(78,205,196,0.2)' : 'rgba(78,205,196,0.1)',
+                                border: `1px solid ${user.role === 'squadleader' ? '#4ecdc4' : 'rgba(78,205,196,0.4)'}`,
+                                borderRadius: '4px',
+                                color: '#4ecdc4',
+                                fontSize: isMobile ? '11px' : '10px',
+                                fontFamily: 'inherit',
+                                cursor: 'pointer',
+                                touchAction: 'manipulation',
+                                userSelect: 'none',
+                                WebkitUserSelect: 'none'
+                              }}
+                            >
+                              {user.role === 'squadleader' ? '↓ DEMOTE' : '↑ PROMOTE'}
+                            </button>
+                            <button
+                              onPointerDown={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                kickUser(user.peerId, user.username);
+                              }}
+                              style={{
+                                padding: isMobile ? '10px 12px' : '8px 10px',
+                                background: 'rgba(255,50,50,0.1)',
+                                border: '1px solid rgba(255,50,50,0.4)',
+                                borderRadius: '4px',
+                                color: '#ff6666',
+                                fontSize: isMobile ? '11px' : '10px',
+                                fontFamily: 'inherit',
+                                cursor: 'pointer',
+                                touchAction: 'manipulation',
+                                userSelect: 'none',
+                                WebkitUserSelect: 'none'
+                              }}
+                            >
+                              KICK
+                            </button>
                           </div>
                         )}
                       </div>
@@ -1096,51 +1347,6 @@
               )}
             </div>
             
-            {isMobile && isHostRef.current && !isCommandNet && channelUsers.filter(u => !u.isHost).length > 0 && (
-              <div style={{ marginTop: '12px', padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px' }}>
-                <div style={{ fontSize: '9px', color: '#5a7a5a', marginBottom: '8px', textAlign: 'center' }}>MANAGE OPERATORS</div>
-                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'center' }}>
-                  {channelUsers.filter(u => !u.isHost).map(user => (
-                    <div key={user.peerId} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          user.role === 'squadleader' ? demoteToOperator(user.peerId) : promoteToSquadLeader(user.peerId);
-                        }}
-                        style={{
-                          padding: '10px 14px',
-                          background: user.role === 'squadleader' ? 'rgba(78,205,196,0.2)' : 'rgba(0,0,0,0.3)',
-                          border: `1px solid ${user.role === 'squadleader' ? '#4ecdc4' : 'rgba(100,100,100,0.3)'}`,
-                          borderRadius: '4px',
-                          color: user.role === 'squadleader' ? '#4ecdc4' : '#888',
-                          fontSize: '11px',
-                          fontFamily: 'inherit'
-                        }}
-                      >
-                        {user.username.slice(0, 8).toUpperCase()} {user.role === 'squadleader' ? '◆' : '→◆'}
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          kickUser(user.peerId, user.username);
-                        }}
-                        style={{
-                          padding: '8px 14px',
-                          background: 'rgba(255,50,50,0.1)',
-                          border: '1px solid rgba(255,50,50,0.4)',
-                          borderRadius: '4px',
-                          color: '#ff6666',
-                          fontSize: '10px',
-                          fontFamily: 'inherit'
-                        }}
-                      >
-                        KICK
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         );
       };
@@ -1165,6 +1371,21 @@
                 <div style={{ width: isMobile ? '10px' : '12px', height: isMobile ? '10px' : '12px', borderRadius: '50%', background: sessionState !== 'lobby' ? '#00ff66' : '#ff6600', boxShadow: sessionState !== 'lobby' ? '0 0 20px #00ff66' : '0 0 10px #ff6600', animation: sessionState !== 'lobby' ? 'pulse 2s infinite' : 'none' }} />
               </div>
               <p style={{ fontSize: isMobile ? '9px' : '10px', letterSpacing: isMobile ? '2px' : '3px', color: '#6a9a6a', margin: 0 }}>GBRS COMMUNICATIONS SYSTEM v.0.9.3</p>
+              {sessionState !== 'lobby' && (
+                <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                  <div style={{ 
+                    width: '8px', 
+                    height: '8px', 
+                    borderRadius: '50%', 
+                    background: connectionHealth === 'good' ? '#00ff66' : connectionHealth === 'degraded' ? '#ffaa00' : '#ff6666',
+                    boxShadow: `0 0 8px ${connectionHealth === 'good' ? '#00ff66' : connectionHealth === 'degraded' ? '#ffaa00' : '#ff6666'}`,
+                    animation: connectionHealth === 'reconnecting' ? 'pulse 0.5s infinite' : 'none'
+                  }} />
+                  <span style={{ fontSize: '9px', color: connectionHealth === 'good' ? '#4a8a4a' : connectionHealth === 'degraded' ? '#aa8833' : '#aa4444', letterSpacing: '1px' }}>
+                    {connectionHealth === 'good' ? 'CONNECTED' : connectionHealth === 'degraded' ? 'UNSTABLE' : `RECONNECTING${reconnectAttempts > 0 ? ` (${reconnectAttempts}/5)` : ''}...`}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Lobby */}
@@ -1290,6 +1511,45 @@
                     )}
                   </div>
                 </div>
+
+                {/* Mobile: Floating move indicator */}
+                {isMobile && selectedUserForAssign && myRole === 'commander' && (
+                  <div style={{ 
+                    position: 'sticky', 
+                    top: '10px', 
+                    zIndex: 100, 
+                    background: 'rgba(0,50,0,0.95)', 
+                    border: '2px solid #00ff66', 
+                    borderRadius: '8px', 
+                    padding: '12px 16px', 
+                    marginBottom: '15px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '10px',
+                    boxShadow: '0 4px 20px rgba(0,255,100,0.3)'
+                  }}>
+                    <span style={{ fontSize: '12px', color: '#00ff66' }}>
+                      ↔ MOVING: <strong>{selectedUserForAssign.username.toUpperCase()}</strong>
+                    </span>
+                    <button
+                      onPointerDown={(e) => { e.preventDefault(); setSelectedUserForAssign(null); }}
+                      style={{
+                        padding: '8px 12px',
+                        background: 'rgba(255,50,50,0.2)',
+                        border: '1px solid rgba(255,50,50,0.5)',
+                        borderRadius: '4px',
+                        color: '#ff6666',
+                        fontSize: '11px',
+                        fontFamily: 'inherit',
+                        cursor: 'pointer',
+                        touchAction: 'manipulation'
+                      }}
+                    >
+                      CANCEL
+                    </button>
+                  </div>
+                )}
 
                 {/* Hotkeys (Desktop) / Status Buttons (Mobile) */}
                 {isMobile ? (
