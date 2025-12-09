@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>G-COMMS | GBRS Communications System v.0.9.2</title>
+  <title>G-COMMS | GBRS Communications System v.0.9.3</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -33,7 +33,6 @@
     @keyframes soundWave { 0%, 100% { height: 4px; } 50% { height: 16px; } }
     .user-chip { cursor: grab; user-select: none; transition: all 0.2s; }
     .user-chip:active { cursor: grabbing; }
-    .user-chip.dragging { opacity: 0.5; transform: scale(0.95); }
     .channel-drop-zone { transition: all 0.2s; }
     .channel-drop-zone.drag-over { background: rgba(0,255,100,0.1); border-color: rgba(0,255,100,0.5) !important; }
   </style>
@@ -44,6 +43,8 @@
   <script type="text/babel">
     const { useState, useRef, useEffect, useCallback } = React;
 
+    const COMMAND_NET_ID = 'command-net';
+
     const VoIPApp = () => {
       const [sessionState, setSessionState] = useState('lobby');
       const [sessionCode, setSessionCode] = useState('');
@@ -53,6 +54,7 @@
       const [connectedUsers, setConnectedUsers] = useState([]);
       const [myStatus, setMyStatus] = useState('standby');
       const [myChannelId, setMyChannelId] = useState(null);
+      const [myRole, setMyRole] = useState('operator'); // operator, squadleader, commander
       
       const [teams, setTeams] = useState([
         { id: 1, name: 'Alpha Squad', volume: 80, color: '#00ff66' },
@@ -62,16 +64,16 @@
       const [newTeamColor, setNewTeamColor] = useState('#00ff66');
       const [showCreateModal, setShowCreateModal] = useState(false);
       
-      // Host controls
-      const [hostListenChannels, setHostListenChannels] = useState(new Set());
-      const [hostSpeakChannel, setHostSpeakChannel] = useState(null); // null = none, 'all' = all channels, or channel id
-      const [allCallActive, setAllCallActive] = useState(false);
+      // Channel audio states - keyed by channel ID
+      const [channelStates, setChannelStates] = useState({});
+      // { channelId: { listen: bool, speak: bool }, ... }
       
       const [audioLevel, setAudioLevel] = useState(0);
       const [globalMute, setGlobalMute] = useState(false);
       const [whistleActive, setWhistleActive] = useState(false);
       const [incomingWhistle, setIncomingWhistle] = useState(null);
       const [draggedUser, setDraggedUser] = useState(null);
+      const [commandNetVolume, setCommandNetVolume] = useState(80);
       
       const peerRef = useRef(null);
       const connectionsRef = useRef(new Map());
@@ -80,27 +82,30 @@
       const analyserRef = useRef(null);
       const animationRef = useRef(null);
       const isHostRef = useRef(false);
-      const audioElementsRef = useRef(new Map());
       const gainNodesRef = useRef(new Map());
       const teamsRef = useRef(teams);
       const myStatusRef = useRef(myStatus);
       const myChannelIdRef = useRef(myChannelId);
+      const myRoleRef = useRef(myRole);
       const connectedUsersRef = useRef(connectedUsers);
-      const hostListenChannelsRef = useRef(hostListenChannels);
-      const hostSpeakChannelRef = useRef(hostSpeakChannel);
-      const allCallActiveRef = useRef(allCallActive);
+      const channelStatesRef = useRef(channelStates);
 
       useEffect(() => { teamsRef.current = teams; }, [teams]);
       useEffect(() => { myStatusRef.current = myStatus; }, [myStatus]);
       useEffect(() => { myChannelIdRef.current = myChannelId; }, [myChannelId]);
+      useEffect(() => { myRoleRef.current = myRole; }, [myRole]);
       useEffect(() => { connectedUsersRef.current = connectedUsers; }, [connectedUsers]);
-      useEffect(() => { hostListenChannelsRef.current = hostListenChannels; }, [hostListenChannels]);
-      useEffect(() => { hostSpeakChannelRef.current = hostSpeakChannel; }, [hostSpeakChannel]);
-      useEffect(() => { allCallActiveRef.current = allCallActive; }, [allCallActive]);
+      useEffect(() => { channelStatesRef.current = channelStates; }, [channelStates]);
 
-      const isSpeaking = isHostRef.current 
-        ? (hostSpeakChannel !== null && !globalMute)
-        : (myChannelId !== null && !globalMute);
+      // Check if currently speaking on any channel
+      const isSpeaking = Object.values(channelStates).some(s => s.speak) && !globalMute;
+      
+      // Get channels I'm speaking to
+      const getSpeakingChannels = () => {
+        return Object.entries(channelStates)
+          .filter(([_, state]) => state.speak)
+          .map(([id, _]) => id === COMMAND_NET_ID ? COMMAND_NET_ID : parseInt(id));
+      };
 
       const colorOptions = [
         '#00ff66', '#ffcc00', '#ff6b6b', '#4ecdc4', '#a855f7', 
@@ -114,7 +119,27 @@
         wait: { color: '#ffaa00', label: 'WAIT ONE', icon: '🟡' }
       };
 
-      // Update audio routing based on channel assignments
+      const roleConfig = {
+        operator: { label: 'OPERATOR', color: '#00ff66', icon: '●' },
+        squadleader: { label: 'SQUAD LEADER', color: '#4ecdc4', icon: '◆' },
+        commander: { label: 'COMMANDER', color: '#ffcc00', icon: '★' }
+      };
+
+      // Check if user can see command net
+      const canSeeCommandNet = (role) => role === 'commander' || role === 'squadleader';
+
+      // Get channels visible to current user
+      const getVisibleChannels = () => {
+        if (myRole === 'commander') {
+          return teams; // Commander sees all squad channels
+        } else if (myRole === 'squadleader') {
+          return teams.filter(t => t.id === myChannelId); // Squad leader sees their squad
+        } else {
+          return teams.filter(t => t.id === myChannelId); // Operator sees their squad
+        }
+      };
+
+      // Update audio routing
       const updateAudioRouting = useCallback(() => {
         if (!audioContextRef.current) return;
         
@@ -126,22 +151,14 @@
           
           let shouldHear = false;
           
-          if (isHostRef.current) {
-            // Host hears users from channels they're listening to
-            shouldHear = hostListenChannelsRef.current.has(user.channelId);
-          } else {
-            // Regular users only hear people in their channel
-            shouldHear = user.channelId === myChannelIdRef.current && user.channelId !== null;
-          }
-          
-          // Also check if user is speaking (host with all-call or matching channel)
-          if (user.speaking) {
-            if (user.isHost) {
-              // Host speaking - check if all-call or specific channel
-              if (user.speakingToAll || user.speakingChannel === myChannelIdRef.current || isHostRef.current) {
+          // Check if we should hear this user based on their speaking channels and our listening channels
+          if (user.speaking && user.speakingChannels) {
+            user.speakingChannels.forEach(speakingCh => {
+              const chState = channelStatesRef.current[speakingCh];
+              if (chState?.listen) {
                 shouldHear = true;
               }
-            }
+            });
           }
           
           gainNode.gain.value = (shouldHear && !globalMute) ? 1 : 0;
@@ -150,7 +167,7 @@
 
       useEffect(() => {
         updateAudioRouting();
-      }, [connectedUsers, myChannelId, hostListenChannels, globalMute, updateAudioRouting]);
+      }, [connectedUsers, channelStates, globalMute, updateAudioRouting]);
 
       const broadcastStatus = useCallback((newStatus) => {
         setMyStatus(newStatus);
@@ -161,15 +178,14 @@
         });
       }, []);
 
-      const broadcastSpeakingState = useCallback((isSpeakingNow, speakingChannel = null, speakingToAll = false) => {
+      const broadcastSpeakingState = useCallback((speakingChannels) => {
         connectionsRef.current.forEach((connData) => {
           if (connData.conn?.open) {
             connData.conn.send({ 
               type: 'speaking-update', 
               peerId: peerRef.current?.id, 
-              speaking: isSpeakingNow,
-              speakingChannel: speakingChannel,
-              speakingToAll: speakingToAll
+              speaking: speakingChannels.length > 0,
+              speakingChannels: speakingChannels
             });
           }
         });
@@ -177,13 +193,54 @@
 
       useEffect(() => {
         if (sessionState !== 'lobby') {
-          if (isHostRef.current) {
-            broadcastSpeakingState(isSpeaking, hostSpeakChannel, allCallActive);
-          } else {
-            broadcastSpeakingState(isSpeaking, myChannelId, false);
-          }
+          broadcastSpeakingState(getSpeakingChannels());
         }
-      }, [isSpeaking, sessionState, hostSpeakChannel, myChannelId, allCallActive, broadcastSpeakingState]);
+      }, [channelStates, sessionState, globalMute]);
+
+      // Toggle channel listen/speak
+      const toggleChannelListen = (channelId) => {
+        setChannelStates(prev => ({
+          ...prev,
+          [channelId]: { ...prev[channelId], listen: !prev[channelId]?.listen }
+        }));
+      };
+
+      const toggleChannelSpeak = (channelId) => {
+        setChannelStates(prev => ({
+          ...prev,
+          [channelId]: { ...prev[channelId], speak: !prev[channelId]?.speak }
+        }));
+      };
+
+      // Promote user to squad leader (host only)
+      const promoteToSquadLeader = useCallback((userId) => {
+        if (!isHostRef.current) return;
+        
+        setConnectedUsers(prev => prev.map(u => 
+          u.peerId === userId ? { ...u, role: 'squadleader' } : u
+        ));
+        
+        connectionsRef.current.forEach((connData) => {
+          if (connData.conn?.open) {
+            connData.conn.send({ type: 'role-update', peerId: userId, role: 'squadleader' });
+          }
+        });
+      }, []);
+
+      // Demote squad leader to operator (host only)
+      const demoteToOperator = useCallback((userId) => {
+        if (!isHostRef.current) return;
+        
+        setConnectedUsers(prev => prev.map(u => 
+          u.peerId === userId ? { ...u, role: 'operator' } : u
+        ));
+        
+        connectionsRef.current.forEach((connData) => {
+          if (connData.conn?.open) {
+            connData.conn.send({ type: 'role-update', peerId: userId, role: 'operator' });
+          }
+        });
+      }, []);
 
       // Move user to channel (host only)
       const moveUserToChannel = useCallback((userId, channelId) => {
@@ -193,14 +250,12 @@
           u.peerId === userId ? { ...u, channelId } : u
         ));
         
-        // Broadcast to all
         connectionsRef.current.forEach((connData) => {
           if (connData.conn?.open) {
             connData.conn.send({ type: 'user-moved', peerId: userId, channelId });
           }
         });
         
-        // If moving ourselves
         if (userId === peerRef.current?.id) {
           setMyChannelId(channelId);
         }
@@ -275,41 +330,16 @@
           if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'w') {
             e.preventDefault(); broadcastWhistle('attention'); return;
           }
-          // Host: Ctrl+number to toggle listening to channel
-          if (isHostRef.current && e.ctrlKey && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '9') {
+          // Ctrl+0 - Toggle Command Net speak (if visible)
+          if (e.ctrlKey && e.key === '0' && canSeeCommandNet(myRoleRef.current)) {
             e.preventDefault();
-            const channelIndex = parseInt(e.key) - 1;
-            if (channelIndex < teamsRef.current.length) {
-              const channelId = teamsRef.current[channelIndex].id;
-              setHostListenChannels(prev => {
-                const next = new Set(prev);
-                if (next.has(channelId)) next.delete(channelId);
-                else next.add(channelId);
-                return next;
-              });
-            }
+            toggleChannelSpeak(COMMAND_NET_ID);
             return;
           }
-          // Host: Ctrl+Shift+number to speak to channel
-          if (isHostRef.current && e.ctrlKey && e.shiftKey && e.key >= '1' && e.key <= '9') {
+          // Ctrl+` - Toggle Command Net listen (if visible)
+          if (e.ctrlKey && e.key === '`' && canSeeCommandNet(myRoleRef.current)) {
             e.preventDefault();
-            const channelIndex = parseInt(e.key) - 1;
-            if (channelIndex < teamsRef.current.length) {
-              const channelId = teamsRef.current[channelIndex].id;
-              setHostSpeakChannel(prev => prev === channelId ? null : channelId);
-              setAllCallActive(false);
-            }
-            return;
-          }
-          // Host: Ctrl+0 for all-call
-          if (isHostRef.current && e.ctrlKey && e.key === '0') {
-            e.preventDefault();
-            setAllCallActive(prev => !prev);
-            if (!allCallActiveRef.current) {
-              setHostSpeakChannel('all');
-            } else {
-              setHostSpeakChannel(null);
-            }
+            toggleChannelListen(COMMAND_NET_ID);
             return;
           }
         };
@@ -394,13 +424,29 @@
           setConnectedUsers(prev => prev.map(u => u.peerId === data.peerId ? { 
             ...u, 
             speaking: data.speaking,
-            speakingChannel: data.speakingChannel,
-            speakingToAll: data.speakingToAll
+            speakingChannels: data.speakingChannels
           } : u));
+        } else if (data.type === 'role-update') {
+          setConnectedUsers(prev => prev.map(u => u.peerId === data.peerId ? { ...u, role: data.role } : u));
+          if (data.peerId === peerRef.current?.id) {
+            setMyRole(data.role);
+            // If promoted to squad leader, enable command net listening by default
+            if (data.role === 'squadleader') {
+              setChannelStates(prev => ({
+                ...prev,
+                [COMMAND_NET_ID]: { listen: true, speak: false }
+              }));
+            }
+          }
         } else if (data.type === 'user-moved') {
           setConnectedUsers(prev => prev.map(u => u.peerId === data.peerId ? { ...u, channelId: data.channelId } : u));
           if (data.peerId === peerRef.current?.id) {
             setMyChannelId(data.channelId);
+            // Enable listen/speak on assigned channel
+            setChannelStates(prev => ({
+              ...prev,
+              [data.channelId]: { listen: true, speak: true }
+            }));
           }
         } else if (data.type === 'user-joined') {
           setConnectedUsers(prev => {
@@ -410,7 +456,9 @@
                 username: data.username, 
                 status: data.status || 'standby', 
                 speaking: false,
+                speakingChannels: [],
                 channelId: data.channelId || null,
+                role: data.role || 'operator',
                 isHost: data.isHost || false
               }];
             }
@@ -420,7 +468,6 @@
           if (isHostRef.current) {
             const conn = connectionsRef.current.get(fromPeerId)?.conn;
             if (conn?.open) {
-              // Assign new user to first channel by default
               const defaultChannel = teamsRef.current.length > 0 ? teamsRef.current[0].id : null;
               conn.send({
                 type: 'sync-state',
@@ -430,12 +477,13 @@
                   username: data.username, 
                   status: data.status || 'standby',
                   channelId: defaultChannel,
+                  role: 'operator',
                   isHost: false
                 }].map(u => u.peerId === data.peerId ? { ...u, channelId: defaultChannel } : u),
-                yourChannelId: defaultChannel
+                yourChannelId: defaultChannel,
+                yourRole: 'operator'
               });
             }
-            // Broadcast new user to others
             connectionsRef.current.forEach((connData, peerId) => {
               if (peerId !== fromPeerId && connData.conn?.open) {
                 connData.conn.send({ 
@@ -444,6 +492,7 @@
                   username: data.username, 
                   status: data.status || 'standby',
                   channelId: teamsRef.current.length > 0 ? teamsRef.current[0].id : null,
+                  role: 'operator',
                   isHost: false
                 });
               }
@@ -453,6 +502,14 @@
           setTeams(data.teams);
           setConnectedUsers(data.users);
           setMyChannelId(data.yourChannelId);
+          setMyRole(data.yourRole || 'operator');
+          // Set up initial channel states
+          if (data.yourChannelId) {
+            setChannelStates(prev => ({
+              ...prev,
+              [data.yourChannelId]: { listen: true, speak: true }
+            }));
+          }
         } else if (data.type === 'teams-update') {
           setTeams(data.teams);
         } else if (data.type === 'user-left') {
@@ -470,6 +527,7 @@
             username: username, 
             status: myStatusRef.current,
             channelId: myChannelIdRef.current,
+            role: myRoleRef.current,
             isHost: isHostRef.current
           });
           const stream = await getLocalStream();
@@ -481,8 +539,6 @@
         conn.on('data', (data) => handleData(data, conn.peer));
         conn.on('close', () => {
           console.log('Connection closed:', conn.peer);
-          const audioEl = audioElementsRef.current.get(conn.peer);
-          if (audioEl) { audioEl.srcObject = null; audioElementsRef.current.delete(conn.peer); }
           gainNodesRef.current.delete(conn.peer);
           connectionsRef.current.delete(conn.peer);
           setConnectedUsers(prev => prev.filter(u => u.peerId !== conn.peer));
@@ -493,31 +549,19 @@
         call.on('stream', (remoteStream) => {
           console.log('Got stream from:', call.peer);
           
-          // Create audio routing with gain node for channel-based control
           if (!audioContextRef.current) {
             audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
           }
           
           const source = audioContextRef.current.createMediaStreamSource(remoteStream);
           const gainNode = audioContextRef.current.createGain();
-          gainNode.gain.value = 0; // Start muted, updateAudioRouting will enable
+          gainNode.gain.value = 0;
           source.connect(gainNode);
           gainNode.connect(audioContextRef.current.destination);
           
           gainNodesRef.current.set(call.peer, gainNode);
-          
-          // Also keep audio element for reference
-          let audio = audioElementsRef.current.get(call.peer);
-          if (!audio) {
-            audio = new Audio();
-            audio.autoplay = false; // We're using Web Audio API instead
-            audioElementsRef.current.set(call.peer, audio);
-          }
-          audio.srcObject = remoteStream;
-          
           connectionsRef.current.set(call.peer, { ...connectionsRef.current.get(call.peer), stream: remoteStream });
           
-          // Trigger routing update
           setTimeout(() => updateAudioRouting(), 100);
         });
       }, [updateAudioRouting]);
@@ -536,15 +580,20 @@
           isHostRef.current = true;
           setSessionCode(code);
           setSessionState('hosting');
-          // Host listens to all channels by default
-          setHostListenChannels(new Set(teams.map(t => t.id)));
+          setMyRole('commander');
+          // Commander starts with command net and all channels listen enabled
+          const initialStates = { [COMMAND_NET_ID]: { listen: true, speak: false } };
+          teams.forEach(t => { initialStates[t.id] = { listen: true, speak: false }; });
+          setChannelStates(initialStates);
           setConnectedUsers([{ 
             peerId: peer.id, 
             username: username, 
             isHost: true, 
             status: 'standby', 
             speaking: false,
-            channelId: null // Host isn't in a specific channel
+            speakingChannels: [],
+            channelId: null,
+            role: 'commander'
           }]);
         } catch (err) { setError(err.message); }
       };
@@ -569,7 +618,8 @@
           isHostRef.current = false;
           setSessionCode(code);
           setSessionState('joined');
-          setConnectedUsers([{ peerId: peer.id, username: username, status: 'standby', speaking: false, channelId: null }]);
+          setMyRole('operator');
+          setConnectedUsers([{ peerId: peer.id, username: username, status: 'standby', speaking: false, speakingChannels: [], channelId: null, role: 'operator' }]);
         } catch (err) { setError(err.message); }
       };
 
@@ -581,8 +631,6 @@
           }
         });
         connectionsRef.current.clear();
-        audioElementsRef.current.forEach(audio => { audio.srcObject = null; });
-        audioElementsRef.current.clear();
         gainNodesRef.current.clear();
         if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(track => track.stop()); localStreamRef.current = null; }
         if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
@@ -590,21 +638,10 @@
         setSessionCode('');
         setConnectedUsers([]);
         setMyChannelId(null);
+        setMyRole('operator');
         setMyStatus('standby');
-        setHostListenChannels(new Set());
-        setHostSpeakChannel(null);
-        setAllCallActive(false);
+        setChannelStates({});
         isHostRef.current = false;
-      };
-
-      const updateVolume = (id, volume) => {
-        setTeams(prev => prev.map(t => t.id === id ? { ...t, volume } : t));
-      };
-
-      const updateColor = (id, color) => {
-        const newTeams = teams.map(t => t.id === id ? { ...t, color } : t);
-        setTeams(newTeams);
-        syncTeams(newTeams);
       };
 
       const syncTeams = (newTeams) => {
@@ -620,7 +657,7 @@
           const newTeam = { id: Date.now(), name: newTeamName.trim(), volume: 80, color: newTeamColor };
           const newTeams = [...teams, newTeam];
           setTeams(newTeams);
-          setHostListenChannels(prev => new Set([...prev, newTeam.id]));
+          setChannelStates(prev => ({ ...prev, [newTeam.id]: { listen: true, speak: false } }));
           setNewTeamName('');
           setNewTeamColor('#00ff66');
           setShowCreateModal(false);
@@ -629,47 +666,32 @@
       };
 
       const deleteTeam = (id) => {
-        // Move users from this channel to unassigned
         setConnectedUsers(prev => prev.map(u => u.channelId === id ? { ...u, channelId: null } : u));
         const newTeams = teams.filter(t => t.id !== id);
         setTeams(newTeams);
-        setHostListenChannels(prev => { const next = new Set(prev); next.delete(id); return next; });
+        setChannelStates(prev => { const n = { ...prev }; delete n[id]; return n; });
         syncTeams(newTeams);
       };
 
       const copyCode = () => navigator.clipboard.writeText(sessionCode);
 
       useEffect(() => {
-        setConnectedUsers(prev => prev.map(u => u.peerId === peerRef.current?.id ? { ...u, status: myStatus, speaking: isSpeaking } : u));
-      }, [myStatus, isSpeaking]);
+        setConnectedUsers(prev => prev.map(u => 
+          u.peerId === peerRef.current?.id 
+            ? { ...u, status: myStatus, speaking: isSpeaking, speakingChannels: getSpeakingChannels() } 
+            : u
+        ));
+      }, [myStatus, isSpeaking, channelStates]);
 
-      // Drag and drop handlers
-      const handleDragStart = (e, user) => {
-        if (!isHostRef.current) return;
-        setDraggedUser(user);
-        e.dataTransfer.effectAllowed = 'move';
-      };
-
-      const handleDragOver = (e) => {
-        if (!isHostRef.current || !draggedUser) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-      };
-
-      const handleDragEnter = (e) => {
-        if (!isHostRef.current || !draggedUser) return;
-        e.currentTarget.classList.add('drag-over');
-      };
-
-      const handleDragLeave = (e) => {
-        e.currentTarget.classList.remove('drag-over');
-      };
-
+      // Drag and drop
+      const handleDragStart = (e, user) => { if (isHostRef.current) setDraggedUser(user); };
+      const handleDragOver = (e) => { if (isHostRef.current && draggedUser) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; } };
+      const handleDragEnter = (e) => { if (isHostRef.current && draggedUser) e.currentTarget.classList.add('drag-over'); };
+      const handleDragLeave = (e) => { e.currentTarget.classList.remove('drag-over'); };
       const handleDrop = (e, channelId) => {
         e.preventDefault();
         e.currentTarget.classList.remove('drag-over');
-        if (!isHostRef.current || !draggedUser) return;
-        if (!draggedUser.isHost) {
+        if (isHostRef.current && draggedUser && !draggedUser.isHost) {
           moveUserToChannel(draggedUser.peerId, channelId);
         }
         setDraggedUser(null);
@@ -677,6 +699,127 @@
 
       const getUsersInChannel = (channelId) => connectedUsers.filter(u => u.channelId === channelId && !u.isHost);
       const getUnassignedUsers = () => connectedUsers.filter(u => u.channelId === null && !u.isHost);
+      const getCommandNetUsers = () => connectedUsers.filter(u => u.role === 'commander' || u.role === 'squadleader');
+
+      // Channel card component
+      const ChannelCard = ({ channel, isCommandNet = false }) => {
+        const channelId = isCommandNet ? COMMAND_NET_ID : channel.id;
+        const channelState = channelStates[channelId] || { listen: false, speak: false };
+        const channelUsers = isCommandNet ? getCommandNetUsers() : getUsersInChannel(channel.id);
+        const channelColor = isCommandNet ? '#ff6b6b' : channel.color;
+        const channelName = isCommandNet ? 'COMMAND NET' : channel.name;
+        
+        return (
+          <div
+            className={!isCommandNet ? "channel-drop-zone" : ""}
+            onDragOver={!isCommandNet ? handleDragOver : undefined}
+            onDragEnter={!isCommandNet ? handleDragEnter : undefined}
+            onDragLeave={!isCommandNet ? handleDragLeave : undefined}
+            onDrop={!isCommandNet ? (e) => handleDrop(e, channel.id) : undefined}
+            style={{ 
+              background: isCommandNet 
+                ? 'linear-gradient(135deg, rgba(40,15,15,0.9), rgba(50,20,20,0.9))' 
+                : 'linear-gradient(135deg, rgba(10,30,10,0.9), rgba(20,40,20,0.9))', 
+              border: `2px solid ${channelState.speak ? channelColor : channelState.listen ? `${channelColor}66` : 'rgba(255,255,255,0.15)'}`,
+              borderRadius: '12px', 
+              padding: '18px',
+              boxShadow: channelState.speak ? `0 0 30px ${channelColor}33` : 'none',
+              marginBottom: '15px'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ width: '16px', height: '16px', borderRadius: '50%', background: channelColor, boxShadow: `0 0 10px ${channelColor}66` }} />
+                <div>
+                  <h2 style={{ margin: 0, fontSize: '15px', fontWeight: '500', letterSpacing: '2px', color: channelColor }}>
+                    {isCommandNet ? '📡 ' : ''}{channelName.toUpperCase()}
+                  </h2>
+                  <span style={{ fontSize: '9px', color: '#5a7a5a' }}>
+                    {isCommandNet ? 'LEADERSHIP ONLY' : `${channelUsers.length} OPERATORS`}
+                    {isCommandNet && ' • Ctrl+` Listen • Ctrl+0 Speak'}
+                  </span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  onClick={() => toggleChannelListen(channelId)}
+                  style={{ padding: '8px 12px', background: channelState.listen ? `${channelColor}33` : 'rgba(0,0,0,0.3)', border: `1px solid ${channelState.listen ? channelColor : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: channelState.listen ? channelColor : '#666', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  🎧 {channelState.listen ? 'ON' : 'OFF'}
+                </button>
+                <button
+                  onClick={() => toggleChannelSpeak(channelId)}
+                  style={{ padding: '8px 12px', background: channelState.speak ? `${channelColor}33` : 'rgba(0,0,0,0.3)', border: `1px solid ${channelState.speak ? channelColor : 'rgba(100,100,100,0.3)'}`, borderRadius: '6px', color: channelState.speak ? channelColor : '#666', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: '6px', animation: channelState.speak ? 'pulse 1s infinite' : 'none' }}
+                >
+                  🎙️ {channelState.speak ? 'TX' : 'OFF'}
+                </button>
+                {!isCommandNet && isHostRef.current && (
+                  <button onClick={() => deleteTeam(channel.id)} style={{ background: 'transparent', border: 'none', color: '#5a3a3a', fontSize: '18px', cursor: 'pointer', padding: '2px 8px' }} onMouseOver={(e) => e.target.style.color = '#ff4444'} onMouseOut={(e) => e.target.style.color = '#5a3a3a'}>×</button>
+                )}
+              </div>
+            </div>
+
+            {/* Channel Members */}
+            <div style={{ minHeight: '40px', padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px dashed rgba(255,255,255,0.1)' }}>
+              {channelUsers.length === 0 ? (
+                <div style={{ textAlign: 'center', color: '#4a6a4a', fontSize: '11px', padding: '5px' }}>
+                  {isCommandNet ? 'No leadership online' : (isHostRef.current ? 'Drag operators here' : 'No operators')}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {channelUsers.map(user => {
+                    const status = statusConfig[user.status || 'standby'];
+                    const role = roleConfig[user.role || 'operator'];
+                    const isSpeakingHere = user.speaking && user.speakingChannels?.includes(channelId);
+                    return (
+                      <div
+                        key={user.peerId}
+                        draggable={isHostRef.current && !user.isHost && !isCommandNet}
+                        onDragStart={(e) => handleDragStart(e, user)}
+                        onDragEnd={() => setDraggedUser(null)}
+                        className={isHostRef.current && !user.isHost && !isCommandNet ? 'user-chip' : ''}
+                        style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: '8px', 
+                          padding: '8px 12px', 
+                          background: isSpeakingHere ? 'rgba(0,255,100,0.2)' : 'rgba(0,0,0,0.4)', 
+                          border: `1px solid ${isSpeakingHere ? 'rgba(0,255,100,0.5)' : 'rgba(255,255,255,0.1)'}`, 
+                          borderRadius: '6px',
+                          position: 'relative'
+                        }}
+                      >
+                        <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: status.color, boxShadow: `0 0 6px ${status.color}`, animation: isSpeakingHere ? 'pulse 0.5s infinite' : 'none' }} />
+                        <div>
+                          <div style={{ fontSize: '11px', color: user.peerId === peerRef.current?.id ? '#00ff66' : '#e0ffe0', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <span style={{ color: role.color }}>{role.icon}</span>
+                            {user.username.toUpperCase()}
+                            {user.peerId === peerRef.current?.id && <span style={{ fontSize: '9px', color: '#5a8a5a' }}>(YOU)</span>}
+                          </div>
+                          {isHostRef.current && !user.isHost && !isCommandNet && (
+                            <div style={{ fontSize: '8px', marginTop: '2px' }}>
+                              {user.role === 'squadleader' ? (
+                                <span onClick={() => demoteToOperator(user.peerId)} style={{ color: '#ff6666', cursor: 'pointer' }}>DEMOTE</span>
+                              ) : (
+                                <span onClick={() => promoteToSquadLeader(user.peerId)} style={{ color: '#4ecdc4', cursor: 'pointer' }}>→ SQUAD LEADER</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        {isSpeakingHere && (
+                          <div style={{ display: 'flex', gap: '2px', alignItems: 'flex-end', height: '12px' }}>
+                            {[1,2,3].map(i => (<div key={i} style={{ width: '2px', background: '#00ff66', borderRadius: '1px', animation: 'soundWave 0.5s infinite', animationDelay: `${i*0.1}s` }} />))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      };
 
       return (
         <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #0a0f0a 0%, #1a1f1a 50%, #0f1a0f 100%)', fontFamily: '"JetBrains Mono", monospace', color: '#e0ffe0', padding: '40px 20px', position: 'relative', overflow: 'hidden' }}>
@@ -697,7 +840,7 @@
                 <h1 style={{ fontSize: '38px', fontWeight: '300', letterSpacing: '6px', margin: 0, textShadow: '0 0 30px rgba(0,255,100,0.3)' }}>G-COMMS</h1>
                 <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: sessionState !== 'lobby' ? '#00ff66' : '#ff6600', boxShadow: sessionState !== 'lobby' ? '0 0 20px #00ff66' : '0 0 10px #ff6600', animation: sessionState !== 'lobby' ? 'pulse 2s infinite' : 'none' }} />
               </div>
-              <p style={{ fontSize: '10px', letterSpacing: '3px', color: '#6a9a6a', margin: 0 }}>GBRS COMMUNICATIONS SYSTEM v.0.9.2</p>
+              <p style={{ fontSize: '10px', letterSpacing: '3px', color: '#6a9a6a', margin: 0 }}>GBRS COMMUNICATIONS SYSTEM v.0.9.3</p>
             </div>
 
             {/* Lobby */}
@@ -734,15 +877,15 @@
                     <div style={{ width: '1px', height: '35px', background: 'rgba(0,255,100,0.2)' }} />
                     <div>
                       <span style={{ fontSize: '9px', color: '#5a8a5a', letterSpacing: '2px' }}>ROLE</span>
-                      <div style={{ fontSize: '12px', marginTop: '4px', color: isHostRef.current ? '#ffcc00' : '#00ff66' }}>
-                        {isHostRef.current ? '★ COMMANDER' : '● OPERATOR'}
+                      <div style={{ fontSize: '12px', marginTop: '4px', color: roleConfig[myRole].color, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        {roleConfig[myRole].icon} {roleConfig[myRole].label}
                       </div>
                     </div>
-                    {!isHostRef.current && myChannelId && (
+                    {myRole === 'operator' && myChannelId && (
                       <>
                         <div style={{ width: '1px', height: '35px', background: 'rgba(0,255,100,0.2)' }} />
                         <div>
-                          <span style={{ fontSize: '9px', color: '#5a8a5a', letterSpacing: '2px' }}>MY CHANNEL</span>
+                          <span style={{ fontSize: '9px', color: '#5a8a5a', letterSpacing: '2px' }}>CHANNEL</span>
                           <div style={{ fontSize: '12px', marginTop: '4px', color: teams.find(t => t.id === myChannelId)?.color || '#00ff66' }}>
                             {teams.find(t => t.id === myChannelId)?.name.toUpperCase() || 'UNASSIGNED'}
                           </div>
@@ -761,39 +904,7 @@
                   </div>
                 </div>
 
-                {/* Host All-Call Panel */}
-                {isHostRef.current && (
-                  <div style={{ background: allCallActive ? 'rgba(255,50,50,0.15)' : 'rgba(0,20,0,0.5)', border: `2px solid ${allCallActive ? 'rgba(255,100,100,0.5)' : 'rgba(0,255,100,0.2)'}`, borderRadius: '10px', padding: '15px', marginBottom: '15px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '15px' }}>
-                      <div>
-                        <span style={{ fontSize: '11px', letterSpacing: '2px', color: '#ffcc00' }}>★ COMMANDER CONTROLS</span>
-                        <div style={{ fontSize: '9px', color: '#5a7a5a', marginTop: '4px' }}>Ctrl+0: All-Call | Ctrl+1-9: Listen | Ctrl+Shift+1-9: Speak</div>
-                      </div>
-                      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                        <button 
-                          onClick={() => { setAllCallActive(!allCallActive); setHostSpeakChannel(allCallActive ? null : 'all'); }}
-                          style={{ 
-                            padding: '12px 20px', 
-                            background: allCallActive ? 'rgba(255,50,50,0.3)' : 'rgba(255,50,50,0.1)', 
-                            border: `2px solid ${allCallActive ? '#ff6666' : 'rgba(255,100,100,0.4)'}`,
-                            borderRadius: '8px', 
-                            color: allCallActive ? '#ff6666' : '#ff9999', 
-                            fontSize: '12px', 
-                            fontWeight: '600',
-                            letterSpacing: '2px', 
-                            cursor: 'pointer', 
-                            fontFamily: 'inherit',
-                            animation: allCallActive ? 'pulse 0.5s infinite' : 'none'
-                          }}
-                        >
-                          📢 ALL-CALL {allCallActive ? 'ACTIVE' : 'OFF'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Signals Panel */}
+                {/* Signals */}
                 <div style={{ display: 'flex', gap: '10px', marginBottom: '15px', padding: '15px', background: 'rgba(0,20,0,0.4)', border: '1px solid rgba(255,200,0,0.2)', borderRadius: '10px', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: '10px', letterSpacing: '2px', color: '#aa9944', display: 'flex', alignItems: 'center', marginRight: '10px' }}>SIGNALS</span>
                   <button onClick={() => broadcastWhistle('attention')} style={{ flex: 1, minWidth: '100px', padding: '10px 15px', background: 'rgba(255,200,0,0.1)', border: '1px solid rgba(255,200,0,0.4)', borderRadius: '6px', color: '#ffcc00', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit' }}>📯 ATTENTION</button>
@@ -805,7 +916,9 @@
                 {isSpeaking && (
                   <div style={{ marginBottom: '15px', padding: '12px 18px', background: 'rgba(0,20,0,0.6)', border: '1px solid rgba(0,255,100,0.2)', borderRadius: '8px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                      <span style={{ fontSize: '10px', letterSpacing: '2px', color: '#00ff66' }}>TX {isHostRef.current && allCallActive ? '(ALL)' : ''}</span>
+                      <span style={{ fontSize: '10px', letterSpacing: '2px', color: '#00ff66' }}>
+                        TX → {getSpeakingChannels().map(ch => ch === COMMAND_NET_ID ? 'CMD NET' : teams.find(t => t.id === ch)?.name || ch).join(', ')}
+                      </span>
                       <div style={{ flex: 1, height: '8px', background: 'rgba(0,0,0,0.5)', borderRadius: '4px', overflow: 'hidden' }}>
                         <div style={{ width: `${audioLevel * 100}%`, height: '100%', background: audioLevel > 0.7 ? 'linear-gradient(90deg, #00ff66, #ffff00, #ff3300)' : '#00ff66', transition: 'width 0.05s' }} />
                       </div>
@@ -822,8 +935,8 @@
                   <span style={{ fontSize: '9px', color: '#5a7a5a' }}><kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 5px', borderRadius: '3px' }}>Ctrl+Alt+W</kbd> Wait</span>
                 </div>
 
-                {/* Unassigned Users (Host only) */}
-                {isHostRef.current && getUnassignedUsers().length > 0 && (
+                {/* Unassigned Users (Commander only) */}
+                {myRole === 'commander' && getUnassignedUsers().length > 0 && (
                   <div style={{ background: 'rgba(100,50,0,0.2)', border: '1px solid rgba(255,150,0,0.3)', borderRadius: '10px', padding: '15px', marginBottom: '15px' }}>
                     <div style={{ fontSize: '10px', letterSpacing: '2px', color: '#ff9900', marginBottom: '10px' }}>⚠️ UNASSIGNED — Drag to channel</div>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -844,141 +957,35 @@
                   </div>
                 )}
 
-                {/* Create Channel (Host) */}
-                {isHostRef.current && (
+                {/* Command Net (only visible to commander and squad leaders) */}
+                {canSeeCommandNet(myRole) && (
+                  <ChannelCard isCommandNet={true} channel={{}} />
+                )}
+
+                {/* Create Channel (Commander) */}
+                {myRole === 'commander' && (
                   <button onClick={() => setShowCreateModal(true)} style={{ width: '100%', padding: '16px', marginBottom: '15px', background: 'transparent', border: '2px dashed rgba(0,255,100,0.3)', borderRadius: '12px', color: '#4a8a4a', fontSize: '12px', letterSpacing: '3px', cursor: 'pointer', fontFamily: 'inherit' }}>+ CREATE CHANNEL</button>
                 )}
 
-                {/* Channels */}
-                <div style={{ display: 'grid', gap: '15px' }}>
-                  {teams.map((team, index) => {
-                    const channelUsers = getUsersInChannel(team.id);
-                    const isMyChannel = myChannelId === team.id;
-                    const isHostListening = hostListenChannels.has(team.id);
-                    const isHostSpeaking = hostSpeakChannel === team.id || hostSpeakChannel === 'all';
-                    
-                    return (
-                      <div
-                        key={team.id}
-                        className="channel-drop-zone"
-                        onDragOver={handleDragOver}
-                        onDragEnter={handleDragEnter}
-                        onDragLeave={handleDragLeave}
-                        onDrop={(e) => handleDrop(e, team.id)}
-                        style={{ 
-                          background: 'linear-gradient(135deg, rgba(10,30,10,0.9), rgba(20,40,20,0.9))', 
-                          border: `2px solid ${isMyChannel ? team.color : isHostListening ? `${team.color}66` : 'rgba(0,255,100,0.15)'}`,
-                          borderRadius: '12px', 
-                          padding: '18px',
-                          boxShadow: isMyChannel || (isHostRef.current && isHostSpeaking) ? `0 0 30px ${team.color}33` : 'none'
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <div style={{ position: 'relative' }}>
-                              <div 
-                                style={{ width: '16px', height: '16px', borderRadius: '50%', background: team.color, boxShadow: `0 0 10px ${team.color}66`, cursor: isHostRef.current ? 'pointer' : 'default' }}
-                                onClick={(e) => { if (isHostRef.current) { const cp = e.currentTarget.nextElementSibling; cp.style.display = cp.style.display === 'none' ? 'flex' : 'none'; }}}
-                              />
-                              {isHostRef.current && (
-                                <div style={{ display: 'none', position: 'absolute', top: '25px', left: '0', background: 'rgba(20,30,20,0.95)', border: '1px solid rgba(0,255,100,0.3)', borderRadius: '8px', padding: '8px', gap: '6px', flexWrap: 'wrap', width: '140px', zIndex: 100 }}>
-                                  {colorOptions.map(color => (<div key={color} onClick={() => updateColor(team.id, color)} style={{ width: '20px', height: '20px', borderRadius: '4px', background: color, cursor: 'pointer', border: team.color === color ? '2px solid white' : '2px solid transparent' }} />))}
-                                </div>
-                              )}
-                            </div>
-                            <div>
-                              <h2 style={{ margin: 0, fontSize: '15px', fontWeight: '500', letterSpacing: '2px', color: team.color }}>{team.name.toUpperCase()}</h2>
-                              <span style={{ fontSize: '9px', color: '#5a7a5a' }}>CH {index + 1} • {channelUsers.length} OPERATORS</span>
-                            </div>
-                          </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            {isMyChannel && !isHostRef.current && (
-                              <span style={{ fontSize: '9px', padding: '4px 8px', background: `${team.color}33`, border: `1px solid ${team.color}`, borderRadius: '4px', color: team.color }}>YOUR CHANNEL</span>
-                            )}
-                            {isHostRef.current && (
-                              <>
-                                <button
-                                  onClick={() => setHostListenChannels(prev => { const n = new Set(prev); if (n.has(team.id)) n.delete(team.id); else n.add(team.id); return n; })}
-                                  style={{ padding: '6px 10px', background: isHostListening ? `${team.color}33` : 'rgba(0,0,0,0.3)', border: `1px solid ${isHostListening ? team.color : 'rgba(100,100,100,0.3)'}`, borderRadius: '4px', color: isHostListening ? team.color : '#666', fontSize: '10px', cursor: 'pointer', fontFamily: 'inherit' }}
-                                >
-                                  🎧 {isHostListening ? 'ON' : 'OFF'}
-                                </button>
-                                <button
-                                  onClick={() => { setHostSpeakChannel(prev => prev === team.id ? null : team.id); setAllCallActive(false); }}
-                                  style={{ padding: '6px 10px', background: isHostSpeaking && !allCallActive ? `${team.color}33` : 'rgba(0,0,0,0.3)', border: `1px solid ${isHostSpeaking && !allCallActive ? team.color : 'rgba(100,100,100,0.3)'}`, borderRadius: '4px', color: isHostSpeaking && !allCallActive ? team.color : '#666', fontSize: '10px', cursor: 'pointer', fontFamily: 'inherit' }}
-                                >
-                                  🎙️ {isHostSpeaking && !allCallActive ? 'TX' : 'OFF'}
-                                </button>
-                              </>
-                            )}
-                            {isHostRef.current && (<button onClick={() => deleteTeam(team.id)} style={{ background: 'transparent', border: 'none', color: '#5a3a3a', fontSize: '18px', cursor: 'pointer', padding: '2px 8px' }} onMouseOver={(e) => e.target.style.color = '#ff4444'} onMouseOut={(e) => e.target.style.color = '#5a3a3a'}>×</button>)}
-                          </div>
-                        </div>
+                {/* Squad Channels */}
+                {myRole === 'commander' && teams.map(team => (
+                  <ChannelCard key={team.id} channel={team} />
+                ))}
 
-                        {/* Volume */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '15px', padding: '10px 12px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px' }}>
-                          <span style={{ fontSize: '9px', color: '#6a8a6a' }}>VOL</span>
-                          <input type="range" min="0" max="100" value={team.volume} onChange={(e) => updateVolume(team.id, parseInt(e.target.value))} style={{ flex: 1, height: '6px', appearance: 'none', background: `linear-gradient(to right, ${team.color} ${team.volume}%, rgba(100,100,100,0.3) ${team.volume}%)`, borderRadius: '3px', cursor: 'pointer' }} />
-                          <span style={{ fontSize: '11px', color: team.color, minWidth: '35px', textAlign: 'right' }}>{team.volume}%</span>
-                        </div>
+                {/* Squad Leader view - their squad + command net */}
+                {myRole === 'squadleader' && teams.filter(t => t.id === myChannelId).map(team => (
+                  <ChannelCard key={team.id} channel={team} />
+                ))}
 
-                        {/* Channel Members */}
-                        <div style={{ minHeight: '50px', padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px dashed rgba(255,255,255,0.1)' }}>
-                          {channelUsers.length === 0 ? (
-                            <div style={{ textAlign: 'center', color: '#4a6a4a', fontSize: '11px', padding: '10px' }}>
-                              {isHostRef.current ? 'Drag operators here' : 'No operators assigned'}
-                            </div>
-                          ) : (
-                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                              {channelUsers.map(user => {
-                                const status = statusConfig[user.status || 'standby'];
-                                return (
-                                  <div
-                                    key={user.peerId}
-                                    draggable={isHostRef.current}
-                                    onDragStart={(e) => handleDragStart(e, user)}
-                                    onDragEnd={() => setDraggedUser(null)}
-                                    className={isHostRef.current ? 'user-chip' : ''}
-                                    style={{ 
-                                      display: 'flex', 
-                                      alignItems: 'center', 
-                                      gap: '8px', 
-                                      padding: '8px 12px', 
-                                      background: user.speaking ? 'rgba(0,255,100,0.2)' : 'rgba(0,0,0,0.4)', 
-                                      border: `1px solid ${user.speaking ? 'rgba(0,255,100,0.5)' : 'rgba(255,255,255,0.1)'}`, 
-                                      borderRadius: '6px',
-                                      transition: 'all 0.2s'
-                                    }}
-                                  >
-                                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: status.color, boxShadow: `0 0 6px ${status.color}`, animation: user.speaking ? 'pulse 0.5s infinite' : 'none' }} />
-                                    <span style={{ fontSize: '11px', color: user.peerId === peerRef.current?.id ? '#00ff66' : '#e0ffe0' }}>
-                                      {user.username.toUpperCase()}
-                                      {user.peerId === peerRef.current?.id && <span style={{ fontSize: '9px', color: '#5a8a5a' }}> (YOU)</span>}
-                                    </span>
-                                    {user.speaking && (
-                                      <div style={{ display: 'flex', gap: '2px', alignItems: 'flex-end', height: '12px' }}>
-                                        {[1,2,3].map(i => (<div key={i} style={{ width: '2px', background: '#00ff66', borderRadius: '1px', animation: 'soundWave 0.5s infinite', animationDelay: `${i*0.1}s` }} />))}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                {/* Operator view - just their squad */}
+                {myRole === 'operator' && teams.filter(t => t.id === myChannelId).map(team => (
+                  <ChannelCard key={team.id} channel={team} />
+                ))}
 
-                {teams.length === 0 && (<div style={{ textAlign: 'center', padding: '50px', color: '#4a6a4a' }}><p style={{ fontSize: '13px', letterSpacing: '2px' }}>NO CHANNELS — Commander must create channels</p></div>)}
-
-                {/* Host indicator for listening to commander */}
-                {connectedUsers.find(u => u.isHost && u.speaking) && !isHostRef.current && (
-                  <div style={{ position: 'fixed', bottom: '20px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(255,200,0,0.2)', border: '2px solid rgba(255,200,0,0.6)', borderRadius: '10px', padding: '12px 24px', zIndex: 2000 }}>
-                    <span style={{ fontSize: '12px', letterSpacing: '2px', color: '#ffcc00' }}>
-                      📢 COMMANDER {connectedUsers.find(u => u.isHost)?.speakingToAll ? 'ALL-CALL' : 'TRANSMITTING'}
-                    </span>
+                {myRole === 'operator' && !myChannelId && (
+                  <div style={{ textAlign: 'center', padding: '50px', color: '#ff9900', background: 'rgba(100,50,0,0.2)', borderRadius: '12px', border: '1px solid rgba(255,150,0,0.3)' }}>
+                    <p style={{ fontSize: '14px', letterSpacing: '2px', marginBottom: '10px' }}>⏳ AWAITING ASSIGNMENT</p>
+                    <p style={{ fontSize: '11px', color: '#aa7733' }}>Commander will assign you to a channel</p>
                   </div>
                 )}
               </>
