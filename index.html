@@ -148,6 +148,7 @@
       const allCallActiveRef = useRef(allCallActive);
       const wakeLockRef = useRef(null);
       const boardContentRef = useRef(boardContent);
+      const boardEditorRef = useRef(null);
 
       // Wake Lock - prevent screen from sleeping during session
       const requestWakeLock = async () => {
@@ -184,6 +185,12 @@
       useEffect(() => { channelStatesRef.current = channelStates; }, [channelStates]);
       useEffect(() => { allCallActiveRef.current = allCallActive; }, [allCallActive]);
       useEffect(() => { boardContentRef.current = boardContent; }, [boardContent]);
+      // Sync board content to editor when received from host (but not when we're editing)
+      useEffect(() => {
+        if (boardEditorRef.current && document.activeElement !== boardEditorRef.current) {
+          boardEditorRef.current.innerHTML = boardContent;
+        }
+      }, [boardContent]);
 
       // Re-acquire wake lock when tab becomes visible again
       useEffect(() => {
@@ -1564,11 +1571,11 @@
                               <button onClick={() => document.execCommand('formatBlock', false, 'p')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '10px', cursor: 'pointer', fontFamily: 'inherit' }}>¶</button>
                             </div>
                             <div
+                              ref={boardEditorRef}
                               contentEditable
                               onBlur={(e) => broadcastBoard(e.target.innerHTML)}
-                              onInput={(e) => setBoardContent(e.target.innerHTML)}
-                              dangerouslySetInnerHTML={{ __html: boardContent }}
-                              placeholder="Enter mission briefing, objectives, standing orders..."
+                              suppressContentEditableWarning={true}
+                              data-placeholder="Enter mission briefing, objectives, standing orders..."
                               style={{
                                 minHeight: '100px',
                                 padding: '12px',
