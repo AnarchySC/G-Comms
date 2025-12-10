@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>G-COMMS | GBRS Communications System v.0.9.3</title>
+  <title>G-COMMS | GBRS Communications System v.0.9.4</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -125,6 +125,8 @@
       const [wakeLockActive, setWakeLockActive] = useState(false);
       const [connectionHealth, setConnectionHealth] = useState('good'); // good, degraded, reconnecting
       const [reconnectAttempts, setReconnectAttempts] = useState(0);
+      const [boardContent, setBoardContent] = useState(''); // Commander's board HTML content
+      const [boardExpanded, setBoardExpanded] = useState(true); // Toggle board visibility
       
       const peerRef = useRef(null);
       const reconnectTimeoutRef = useRef(null);
@@ -145,6 +147,7 @@
       const channelStatesRef = useRef(channelStates);
       const allCallActiveRef = useRef(allCallActive);
       const wakeLockRef = useRef(null);
+      const boardContentRef = useRef(boardContent);
 
       // Wake Lock - prevent screen from sleeping during session
       const requestWakeLock = async () => {
@@ -180,6 +183,7 @@
       useEffect(() => { connectedUsersRef.current = connectedUsers; }, [connectedUsers]);
       useEffect(() => { channelStatesRef.current = channelStates; }, [channelStates]);
       useEffect(() => { allCallActiveRef.current = allCallActive; }, [allCallActive]);
+      useEffect(() => { boardContentRef.current = boardContent; }, [boardContent]);
 
       // Re-acquire wake lock when tab becomes visible again
       useEffect(() => {
@@ -744,7 +748,8 @@
                 teams: teamsRef.current,
                 users: allUsers,
                 yourChannelId: null,
-                yourRole: 'operator'
+                yourRole: 'operator',
+                boardContent: boardContentRef.current
               });
             }
             
@@ -778,8 +783,13 @@
               [data.yourChannelId]: { listen: true, speak: true }
             }));
           }
+          if (data.boardContent) {
+            setBoardContent(data.boardContent);
+          }
         } else if (data.type === 'teams-update') {
           setTeams(data.teams);
+        } else if (data.type === 'board-update') {
+          setBoardContent(data.content);
         } else if (data.type === 'user-left') {
           setConnectedUsers(prev => prev.filter(u => u.peerId !== data.peerId));
         } else if (data.type === 'kicked') {
@@ -962,6 +972,7 @@
         setMyStatus('standby');
         setChannelStates({});
         setAllCallActive(false);
+        setBoardContent('');
         setConnectionHealth('good');
         setReconnectAttempts(0);
         isHostRef.current = false;
@@ -1081,6 +1092,15 @@
         if (isHostRef.current) {
           connectionsRef.current.forEach((connData) => {
             if (connData.conn?.open) connData.conn.send({ type: 'teams-update', teams: newTeams });
+          });
+        }
+      };
+
+      const broadcastBoard = (content) => {
+        setBoardContent(content);
+        if (isHostRef.current) {
+          connectionsRef.current.forEach((connData) => {
+            if (connData.conn?.open) connData.conn.send({ type: 'board-update', content });
           });
         }
       };
@@ -1379,7 +1399,7 @@
                 <h1 style={{ fontSize: isMobile ? '28px' : '38px', fontWeight: '300', letterSpacing: isMobile ? '4px' : '6px', margin: 0, textShadow: '0 0 30px rgba(0,255,100,0.3)' }}>G-COMMS</h1>
                 <div style={{ width: isMobile ? '10px' : '12px', height: isMobile ? '10px' : '12px', borderRadius: '50%', background: sessionState !== 'lobby' ? '#00ff66' : '#ff6600', boxShadow: sessionState !== 'lobby' ? '0 0 20px #00ff66' : '0 0 10px #ff6600', animation: sessionState !== 'lobby' ? 'pulse 2s infinite' : 'none' }} />
               </div>
-              <p style={{ fontSize: isMobile ? '9px' : '10px', letterSpacing: isMobile ? '2px' : '3px', color: '#6a9a6a', margin: 0 }}>GBRS COMMUNICATIONS SYSTEM v.0.9.3</p>
+              <p style={{ fontSize: isMobile ? '9px' : '10px', letterSpacing: isMobile ? '2px' : '3px', color: '#6a9a6a', margin: 0 }}>GBRS COMMUNICATIONS SYSTEM v.0.9.4</p>
               {sessionState !== 'lobby' && (
                 <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                   <div style={{ 
@@ -1498,6 +1518,89 @@
                         📢 ALL-CALL {allCallActive ? 'ACTIVE' : 'OFF'}
                       </button>
                     </div>
+                  </div>
+                )}
+
+                {/* Commander's Board - visible to all, editable by commander */}
+                {(boardContent || myRole === 'commander') && (
+                  <div style={{
+                    background: 'rgba(0,20,40,0.4)',
+                    border: '1px solid rgba(100,150,255,0.3)',
+                    borderRadius: '10px',
+                    marginBottom: '15px',
+                    overflow: 'hidden'
+                  }}>
+                    <div
+                      onClick={() => setBoardExpanded(!boardExpanded)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: isMobile ? '12px 15px' : '10px 15px',
+                        background: 'rgba(0,0,0,0.2)',
+                        cursor: 'pointer',
+                        userSelect: 'none'
+                      }}
+                    >
+                      <span style={{ fontSize: '10px', letterSpacing: '2px', color: '#88aaff' }}>
+                        📋 COMMANDER'S BOARD
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#88aaff' }}>
+                        {boardExpanded ? '▼' : '▶'}
+                      </span>
+                    </div>
+
+                    {boardExpanded && (
+                      <div style={{ padding: isMobile ? '12px' : '15px' }}>
+                        {myRole === 'commander' ? (
+                          <>
+                            <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                              <button onClick={() => document.execCommand('bold')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', fontFamily: 'inherit' }}>B</button>
+                              <button onClick={() => document.execCommand('italic')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '12px', fontStyle: 'italic', cursor: 'pointer', fontFamily: 'inherit' }}>I</button>
+                              <button onClick={() => document.execCommand('underline')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '12px', textDecoration: 'underline', cursor: 'pointer', fontFamily: 'inherit' }}>U</button>
+                              <div style={{ width: '1px', background: 'rgba(255,255,255,0.2)', margin: '0 4px' }} />
+                              <button onClick={() => document.execCommand('formatBlock', false, 'h2')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit' }}>H1</button>
+                              <button onClick={() => document.execCommand('formatBlock', false, 'h3')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '10px', cursor: 'pointer', fontFamily: 'inherit' }}>H2</button>
+                              <button onClick={() => document.execCommand('formatBlock', false, 'p')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '10px', cursor: 'pointer', fontFamily: 'inherit' }}>¶</button>
+                            </div>
+                            <div
+                              contentEditable
+                              onBlur={(e) => broadcastBoard(e.target.innerHTML)}
+                              onInput={(e) => setBoardContent(e.target.innerHTML)}
+                              dangerouslySetInnerHTML={{ __html: boardContent }}
+                              placeholder="Enter mission briefing, objectives, standing orders..."
+                              style={{
+                                minHeight: '100px',
+                                padding: '12px',
+                                background: 'rgba(0,0,0,0.3)',
+                                border: '1px solid rgba(100,150,255,0.2)',
+                                borderRadius: '6px',
+                                color: '#e0ffe0',
+                                fontSize: '13px',
+                                lineHeight: '1.5',
+                                outline: 'none',
+                                fontFamily: 'inherit'
+                              }}
+                            />
+                            <div style={{ fontSize: '9px', color: '#5a7a8a', marginTop: '8px', textAlign: 'right' }}>
+                              Changes sync automatically when you click away
+                            </div>
+                          </>
+                        ) : (
+                          <div
+                            dangerouslySetInnerHTML={{ __html: boardContent || '<span style="color:#5a7a8a">No orders posted</span>' }}
+                            style={{
+                              padding: '12px',
+                              background: 'rgba(0,0,0,0.2)',
+                              borderRadius: '6px',
+                              color: '#e0ffe0',
+                              fontSize: '13px',
+                              lineHeight: '1.5'
+                            }}
+                          />
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
