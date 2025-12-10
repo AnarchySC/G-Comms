@@ -138,6 +138,8 @@
       const localStreamRef = useRef(null);
       const audioContextRef = useRef(null);
       const analyserRef = useRef(null);
+      const gainNodeRef = useRef(null);
+      const processedStreamRef = useRef(null);
       const animationRef = useRef(null);
       const isHostRef = useRef(false);
       const audioElementsRef = useRef(new Map()); // peerId -> Audio element
@@ -604,33 +606,48 @@
       }, []);
 
       const getLocalStream = useCallback(async () => {
-        if (!localStreamRef.current) {
+        if (!processedStreamRef.current) {
           try {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-              audio: { 
-                echoCancellation: true, 
-                noiseSuppression: true, 
+            const stream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
                 autoGainControl: true,
                 channelCount: 1,           // Mono - half bandwidth
                 sampleRate: 24000,         // Voice optimized (better than 16k, lighter than 48k)
                 latency: 0,                // Request lowest latency
                 googHighpassFilter: true,  // Chrome-specific: filter low rumble
                 googTypingNoiseDetection: true
-              } 
+              }
             });
             localStreamRef.current = stream;
+
+            // Set up audio processing pipeline
             audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-            analyserRef.current = audioContextRef.current.createAnalyser();
             const source = audioContextRef.current.createMediaStreamSource(stream);
-            source.connect(analyserRef.current);
+
+            // Analyser for level metering (always receives audio)
+            analyserRef.current = audioContextRef.current.createAnalyser();
             analyserRef.current.fftSize = 256;
-            return stream;
+            source.connect(analyserRef.current);
+
+            // Gain node for noise gate control
+            gainNodeRef.current = audioContextRef.current.createGain();
+            gainNodeRef.current.gain.value = 0; // Start muted
+            source.connect(gainNodeRef.current);
+
+            // Create processed stream for peer connections
+            const destination = audioContextRef.current.createMediaStreamDestination();
+            gainNodeRef.current.connect(destination);
+            processedStreamRef.current = destination.stream;
+
+            return processedStreamRef.current;
           } catch (err) {
             setError('Microphone access required');
             return null;
           }
         }
-        return localStreamRef.current;
+        return processedStreamRef.current;
       }, []);
 
       useEffect(() => {
@@ -648,12 +665,9 @@
             const isAboveThreshold = level > threshold;
             setNoiseGateOpen(isAboveThreshold);
 
-            // Control actual audio track based on noise gate
-            const tracks = localStreamRef.current?.getAudioTracks();
-            if (tracks) {
-              tracks.forEach(track => {
-                track.enabled = isAboveThreshold;
-              });
+            // Control audio output via gain node (not track.enabled)
+            if (gainNodeRef.current) {
+              gainNodeRef.current.gain.value = isAboveThreshold ? 1 : 0;
             }
 
             animFrame = requestAnimationFrame(updateLevel);
@@ -662,11 +676,9 @@
         } else {
           setAudioLevel(0);
           setNoiseGateOpen(false);
-          // Ensure tracks are disabled when not speaking
-          if (localStreamRef.current) {
-            localStreamRef.current.getAudioTracks().forEach(track => {
-              track.enabled = false;
-            });
+          // Mute output when not speaking (PTT released)
+          if (gainNodeRef.current) {
+            gainNodeRef.current.gain.value = 0;
           }
         }
         return () => {
@@ -674,7 +686,7 @@
         };
       }, [isSpeaking, noiseGateThreshold]);
 
-      // Note: Track enabled state is now controlled by the noise gate useEffect above
+      // Note: Audio output is controlled via gainNodeRef in the useEffect above
 
       const handleData = useCallback((data, fromPeerId) => {
         console.log('Received:', data.type, 'from:', fromPeerId);
@@ -982,6 +994,10 @@
         });
         audioElementsRef.current.clear();
         if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(track => track.stop()); localStreamRef.current = null; }
+        if (processedStreamRef.current) { processedStreamRef.current = null; }
+        if (audioContextRef.current) { audioContextRef.current.close(); audioContextRef.current = null; }
+        gainNodeRef.current = null;
+        analyserRef.current = null;
         if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
         setSessionState('lobby');
         setSessionCode('');
