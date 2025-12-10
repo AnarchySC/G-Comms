@@ -11,6 +11,7 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@nickkell/rnnoise-wasm@0.0.3/dist/index.umd.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -626,6 +627,21 @@
             const ctx = audioContextRef.current;
 
             // === NOISE SUPPRESSION CHAIN ===
+            let audioInput = source; // Start with source, may be replaced by RNNoise output
+
+            // 0. RNNoise AI noise suppression (if available)
+            try {
+              if (window.RnnoiseWasm && window.RnnoiseWasm.createRnnoiseNode) {
+                const rnnoiseNode = await window.RnnoiseWasm.createRnnoiseNode(ctx);
+                source.connect(rnnoiseNode);
+                audioInput = rnnoiseNode;
+                console.log('[Audio] RNNoise AI noise suppression enabled');
+              } else {
+                console.log('[Audio] RNNoise not available, using fallback filters');
+              }
+            } catch (rnnoiseErr) {
+              console.warn('[Audio] RNNoise failed to initialize:', rnnoiseErr);
+            }
 
             // 1. High-pass filter - removes low frequency rumble (AC hum, fans, traffic)
             const highPass = ctx.createBiquadFilter();
@@ -665,8 +681,8 @@
             // Store refs for potential future control
             noiseSuppressionRef.current = { highPass, lowPass, notch60, notch120, compressor, makeupGain };
 
-            // Connect the noise suppression chain
-            source.connect(highPass);
+            // Connect the noise suppression chain (audioInput is either source or RNNoise output)
+            audioInput.connect(highPass);
             highPass.connect(lowPass);
             lowPass.connect(notch60);
             notch60.connect(notch120);
