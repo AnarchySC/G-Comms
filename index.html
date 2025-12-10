@@ -141,6 +141,7 @@
       const gainNodeRef = useRef(null);
       const processedStreamRef = useRef(null);
       const noiseSuppressionRef = useRef(null); // Holds filter chain
+      const gainNodesRef = useRef(new Map()); // peerId -> gain node for remote audio
       const animationRef = useRef(null);
       const isHostRef = useRef(false);
       const audioElementsRef = useRef(new Map()); // peerId -> Audio element
