@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>G-COMMS Tests</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: #0a0f0a;
+      color: #e0ffe0;
+      padding: 20px;
+    }
+    h1 { color: #00ff66; margin-bottom: 20px; }
+    h2 { color: #4ecdc4; margin: 20px 0 10px; font-size: 14px; }
+    .test { padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 13px; }
+    .pass { background: #0a2a0a; border-left: 3px solid #00ff66; }
+    .fail { background: #2a0a0a; border-left: 3px solid #ff4444; }
+    .summary {
+      margin-top: 30px;
+      padding: 15px;
+      background: #1a1f1a;
+      border-radius: 8px;
+      font-size: 16px;
+    }
+    .summary.all-pass { border: 2px solid #00ff66; }
+    .summary.has-fail { border: 2px solid #ff4444; }
+  </style>
+</head>
+<body>
+  <h1>G-COMMS Test Suite</h1>
+  <div id="results"></div>
+  <div id="summary" class="summary"></div>
+
+  <script>
+    const results = [];
+    const container = document.getElementById('results');
+    let currentSection = null;
+
+    function describe(name, fn) {
+      currentSection = document.createElement('div');
+      const header = document.createElement('h2');
+      header.textContent = name;
+      container.appendChild(header);
+      container.appendChild(currentSection);
+      fn();
+    }
+
+    function test(name, fn) {
+      const div = document.createElement('div');
+      div.className = 'test';
+      try {
+        fn();
+        div.className += ' pass';
+        div.textContent = `✓ ${name}`;
+        results.push({ name, passed: true });
+      } catch (e) {
+        div.className += ' fail';
+        div.textContent = `✗ ${name} — ${e.message}`;
+        results.push({ name, passed: false, error: e.message });
+      }
+      currentSection.appendChild(div);
+    }
+
+    function expect(actual) {
+      return {
+        toBe: (expected) => {
+          if (actual !== expected) throw new Error(`Expected ${expected}, got ${actual}`);
+        },
+        toEqual: (expected) => {
+          if (JSON.stringify(actual) !== JSON.stringify(expected))
+            throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+        },
+        toBeTruthy: () => {
+          if (!actual) throw new Error(`Expected truthy, got ${actual}`);
+        },
+        toBeNull: () => {
+          if (actual !== null) throw new Error(`Expected null, got ${actual}`);
+        },
+        toContain: (item) => {
+          if (!actual.includes(item)) throw new Error(`Expected to contain ${item}`);
+        },
+        toHaveLength: (len) => {
+          if (actual.length !== len) throw new Error(`Expected length ${len}, got ${actual.length}`);
+        }
+      };
+    }
+
+    // ========== TESTS START ==========
+
+    describe('Session Persistence (LocalStorage)', () => {
+      const STORAGE_KEY = 'gcomms_test';
+
+      test('should save and retrieve session data', () => {
+        const data = { sessionCode: 'ABC123', username: 'TestUser' };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        const retrieved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        expect(retrieved.sessionCode).toBe('ABC123');
+        localStorage.removeItem(STORAGE_KEY);
+      });
+
+      test('should handle missing data gracefully', () => {
+        const result = localStorage.getItem('nonexistent_key');
+        expect(result).toBeNull();
+      });
+
+      test('should validate session age', () => {
+        const MAX_AGE = 5 * 60 * 1000; // 5 min
+        const recent = { lastActivity: Date.now() - 60000 };
+        const stale = { lastActivity: Date.now() - 600000 };
+        expect(Date.now() - recent.lastActivity < MAX_AGE).toBe(true);
+        expect(Date.now() - stale.lastActivity < MAX_AGE).toBe(false);
+      });
+
+      test('should clear session data', () => {
+        localStorage.setItem(STORAGE_KEY, 'test');
+        localStorage.removeItem(STORAGE_KEY);
+        expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+      });
+    });
+
+    describe('Reconnection Logic', () => {
+      test('should calculate exponential backoff delays', () => {
+        const getDelay = (attempt) => Math.min(1000 * Math.pow(2, attempt), 10000);
+        expect(getDelay(0)).toBe(1000);
+        expect(getDelay(1)).toBe(2000);
+        expect(getDelay(2)).toBe(4000);
+        expect(getDelay(3)).toBe(8000);
+        expect(getDelay(4)).toBe(10000); // capped
+        expect(getDelay(5)).toBe(10000); // still capped
+      });
+
+      test('should track reconnection attempts', () => {
+        let attempts = 0;
+        const maxAttempts = 5;
+        const shouldRetry = () => ++attempts < maxAttempts;
+        while (shouldRetry()) {}
+        expect(attempts).toBe(5);
+      });
+    });
+
+    describe('Peer Promotion Logic', () => {
+      test('should prioritize squad leaders for promotion', () => {
+        const users = [
+          { id: '1', role: 'operator', joinedAt: 1000 },
+          { id: '2', role: 'squad-leader', joinedAt: 2000 },
+          { id: '3', role: 'squad-leader', joinedAt: 1500 },
+        ];
+        const sorted = [...users].sort((a, b) => {
+          if (a.role === 'squad-leader' && b.role !== 'squad-leader') return -1;
+          if (b.role === 'squad-leader' && a.role !== 'squad-leader') return 1;
+          return a.joinedAt - b.joinedAt;
+        });
+        expect(sorted[0].id).toBe('3'); // squad-leader with earliest join
+      });
+    });
+
+    describe('Heartbeat & Connection Health', () => {
+      test('should detect stale connections', () => {
+        const STALE_THRESHOLD = 10000;
+        const connections = new Map([
+          ['peer-1', { lastHeartbeat: Date.now() }],
+          ['peer-2', { lastHeartbeat: Date.now() - 15000 }],
+        ]);
+        const stale = [];
+        connections.forEach((conn, id) => {
+          if (Date.now() - conn.lastHeartbeat > STALE_THRESHOLD) stale.push(id);
+        });
+        expect(stale).toContain('peer-2');
+        expect(stale).toHaveLength(1);
+      });
+
+      test('should classify connection health', () => {
+        const getHealth = (timeSinceHeartbeat) => {
+          if (timeSinceHeartbeat > 10000) return 'DISCONNECTED';
+          if (timeSinceHeartbeat > 6000) return 'UNSTABLE';
+          return 'CONNECTED';
+        };
+        expect(getHealth(3000)).toBe('CONNECTED');
+        expect(getHealth(7000)).toBe('UNSTABLE');
+        expect(getHealth(12000)).toBe('DISCONNECTED');
+      });
+    });
+
+    describe('Message Protocol', () => {
+      test('should structure host transfer message correctly', () => {
+        const msg = {
+          type: 'host-transfer',
+          payload: { newHostId: 'user-1', sessionState: {} }
+        };
+        expect(msg.type).toBe('host-transfer');
+        expect(msg.payload.newHostId).toBe('user-1');
+      });
+
+      test('should structure status update message', () => {
+        const msg = { type: 'status-update', userId: 'u1', status: 'READY' };
+        expect(msg.type).toBe('status-update');
+        expect(msg.status).toBe('READY');
+      });
+    });
+
+    describe('WebRTC Availability', () => {
+      test('should detect RTCPeerConnection support', () => {
+        const hasWebRTC = typeof RTCPeerConnection !== 'undefined';
+        expect(hasWebRTC).toBe(true);
+      });
+
+      test('should detect getUserMedia support', () => {
+        const hasMedia = navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function';
+        expect(hasMedia).toBe(true);
+      });
+    });
+
+    // ========== SUMMARY ==========
+    const passed = results.filter(r => r.passed).length;
+    const failed = results.filter(r => !r.passed).length;
+    const summary = document.getElementById('summary');
+    summary.className = `summary ${failed ? 'has-fail' : 'all-pass'}`;
+    summary.innerHTML = `
+      <strong>${passed}/${results.length} tests passed</strong>
+      ${failed ? `<br><span style="color:#ff4444">${failed} failed</span>` : ''}
+    `;
+  </script>
+</body>
+</html>
