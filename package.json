@@ -1,0 +1,27 @@
+{
+  "name": "g-comms-test",
+  "version": "1.0.0",
+  "description": "Test suite for G-COMMS tactical voice communication system",
+  "scripts": {
+    "test": "jest",
+    "test:unit": "jest --testPathPattern=unit",
+    "test:integration": "playwright test",
+    "test:all": "npm run test:unit && npm run test:integration",
+    "serve": "npx serve . -p 3000"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/jest": "^29.5.11",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "serve": "^14.2.1"
+  },
+  "keywords": [
+    "webrtc",
+    "testing",
+    "voice-communication",
+    "tactical"
+  ],
+  "author": "",
+  "license": "MIT"
+}
