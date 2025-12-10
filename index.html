@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>G-COMMS | GBRS Communications System v.0.9.4</title>
+  <title>G-COMMS-BETA | GBRS Communications System v.0.9.4</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -114,6 +114,8 @@
       // { channelId: { listen: bool, speak: bool }, ... }
       
       const [audioLevel, setAudioLevel] = useState(0);
+      const [noiseGateThreshold, setNoiseGateThreshold] = useState(15); // 0-100, default 15%
+      const [noiseGateOpen, setNoiseGateOpen] = useState(false);
       const [globalMute, setGlobalMute] = useState(false);
       const [whistleActive, setWhistleActive] = useState(false);
       const [incomingWhistle, setIncomingWhistle] = useState(null);
@@ -136,6 +138,9 @@
       const localStreamRef = useRef(null);
       const audioContextRef = useRef(null);
       const analyserRef = useRef(null);
+      const gainNodeRef = useRef(null);
+      const processedStreamRef = useRef(null);
+      const noiseSuppressionRef = useRef(null); // Holds filter chain
       const animationRef = useRef(null);
       const isHostRef = useRef(false);
       const audioElementsRef = useRef(new Map()); // peerId -> Audio element
@@ -602,67 +607,137 @@
       }, []);
 
       const getLocalStream = useCallback(async () => {
-        if (!localStreamRef.current) {
+        if (!processedStreamRef.current) {
           try {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-              audio: { 
-                echoCancellation: true, 
-                noiseSuppression: true, 
+            const stream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
                 autoGainControl: true,
                 channelCount: 1,           // Mono - half bandwidth
-                sampleRate: 24000,         // Voice optimized (better than 16k, lighter than 48k)
+                sampleRate: 48000,         // Higher sample rate for better filter quality
                 latency: 0,                // Request lowest latency
                 googHighpassFilter: true,  // Chrome-specific: filter low rumble
                 googTypingNoiseDetection: true
-              } 
+              }
             });
             localStreamRef.current = stream;
+
+            // Set up audio processing pipeline
             audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-            analyserRef.current = audioContextRef.current.createAnalyser();
             const source = audioContextRef.current.createMediaStreamSource(stream);
-            source.connect(analyserRef.current);
+            const ctx = audioContextRef.current;
+
+            // === NOISE SUPPRESSION CHAIN ===
+
+            // 1. High-pass filter - removes low frequency rumble (AC hum, fans, traffic)
+            const highPass = ctx.createBiquadFilter();
+            highPass.type = 'highpass';
+            highPass.frequency.value = 85;  // Cut below 85Hz (voice starts ~85Hz)
+            highPass.Q.value = 0.7;
+
+            // 2. Low-pass filter - removes high frequency hiss
+            const lowPass = ctx.createBiquadFilter();
+            lowPass.type = 'lowpass';
+            lowPass.frequency.value = 8000;  // Cut above 8kHz (voice intelligibility range)
+            lowPass.Q.value = 0.7;
+
+            // 3. Notch filter - removes 60Hz electrical hum (and harmonics)
+            const notch60 = ctx.createBiquadFilter();
+            notch60.type = 'notch';
+            notch60.frequency.value = 60;
+            notch60.Q.value = 30;
+
+            const notch120 = ctx.createBiquadFilter();
+            notch120.type = 'notch';
+            notch120.frequency.value = 120;  // 2nd harmonic
+            notch120.Q.value = 30;
+
+            // 4. Compressor - normalizes levels and reduces dynamic range
+            const compressor = ctx.createDynamicsCompressor();
+            compressor.threshold.value = -24;   // Start compressing at -24dB
+            compressor.knee.value = 12;          // Soft knee for natural sound
+            compressor.ratio.value = 4;          // 4:1 compression ratio
+            compressor.attack.value = 0.003;     // Fast attack (3ms)
+            compressor.release.value = 0.15;     // Medium release (150ms)
+
+            // 5. Makeup gain after compression
+            const makeupGain = ctx.createGain();
+            makeupGain.gain.value = 1.5;  // Boost to compensate for compression
+
+            // Store refs for potential future control
+            noiseSuppressionRef.current = { highPass, lowPass, notch60, notch120, compressor, makeupGain };
+
+            // Connect the noise suppression chain
+            source.connect(highPass);
+            highPass.connect(lowPass);
+            lowPass.connect(notch60);
+            notch60.connect(notch120);
+            notch120.connect(compressor);
+            compressor.connect(makeupGain);
+
+            // Analyser for level metering (receives cleaned audio)
+            analyserRef.current = ctx.createAnalyser();
             analyserRef.current.fftSize = 256;
-            return stream;
+            makeupGain.connect(analyserRef.current);
+
+            // Gain node for noise gate control
+            gainNodeRef.current = ctx.createGain();
+            gainNodeRef.current.gain.value = 0; // Start muted
+            makeupGain.connect(gainNodeRef.current);
+
+            // Create processed stream for peer connections
+            const destination = ctx.createMediaStreamDestination();
+            gainNodeRef.current.connect(destination);
+            processedStreamRef.current = destination.stream;
+
+            console.log('[Audio] Noise suppression chain initialized');
+            return processedStreamRef.current;
           } catch (err) {
             setError('Microphone access required');
             return null;
           }
         }
-        return localStreamRef.current;
+        return processedStreamRef.current;
       }, []);
 
       useEffect(() => {
         let animFrame;
-        if (isSpeaking && analyserRef.current) {
+        if (isSpeaking && analyserRef.current && localStreamRef.current) {
           const updateLevel = () => {
             const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
             analyserRef.current.getByteFrequencyData(dataArray);
             const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
-            setAudioLevel(avg / 255);
+            const level = avg / 255;
+            setAudioLevel(level);
+
+            // Noise gate logic: only open gate if level exceeds threshold
+            const threshold = noiseGateThreshold / 100;
+            const isAboveThreshold = level > threshold;
+            setNoiseGateOpen(isAboveThreshold);
+
+            // Control audio output via gain node (not track.enabled)
+            if (gainNodeRef.current) {
+              gainNodeRef.current.gain.value = isAboveThreshold ? 1 : 0;
+            }
+
             animFrame = requestAnimationFrame(updateLevel);
           };
           updateLevel();
         } else {
           setAudioLevel(0);
+          setNoiseGateOpen(false);
+          // Mute output when not speaking (PTT released)
+          if (gainNodeRef.current) {
+            gainNodeRef.current.gain.value = 0;
+          }
         }
-        return () => { 
+        return () => {
           if (animFrame) cancelAnimationFrame(animFrame);
         };
-      }, [isSpeaking]);
+      }, [isSpeaking, noiseGateThreshold]);
 
-      useEffect(() => {
-        console.log('isSpeaking changed:', isSpeaking, 'channelStates:', channelStates, 'globalMute:', globalMute, 'allCallActive:', allCallActive);
-        if (localStreamRef.current) {
-          const tracks = localStreamRef.current.getAudioTracks();
-          console.log('Audio tracks:', tracks.length);
-          tracks.forEach(track => { 
-            track.enabled = isSpeaking;
-            console.log('Mic track enabled:', track.enabled);
-          });
-        } else {
-          console.log('No localStreamRef.current');
-        }
-      }, [isSpeaking, channelStates, globalMute, allCallActive]);
+      // Note: Audio output is controlled via gainNodeRef in the useEffect above
 
       const handleData = useCallback((data, fromPeerId) => {
         console.log('Received:', data.type, 'from:', fromPeerId);
@@ -970,6 +1045,11 @@
         });
         audioElementsRef.current.clear();
         if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(track => track.stop()); localStreamRef.current = null; }
+        if (processedStreamRef.current) { processedStreamRef.current = null; }
+        if (audioContextRef.current) { audioContextRef.current.close(); audioContextRef.current = null; }
+        gainNodeRef.current = null;
+        analyserRef.current = null;
+        noiseSuppressionRef.current = null;
         if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
         setSessionState('lobby');
         setSessionCode('');
@@ -1606,20 +1686,47 @@
                 {/* TX Status - Always visible */}
                 <div style={{ marginBottom: '15px', padding: '12px 18px', background: isSpeaking ? (allCallActive ? 'rgba(255,50,50,0.2)' : 'rgba(0,100,0,0.3)') : 'rgba(0,20,0,0.4)', border: `1px solid ${isSpeaking ? (allCallActive ? 'rgba(255,100,100,0.4)' : 'rgba(0,255,100,0.4)') : 'rgba(100,100,100,0.2)'}`, borderRadius: '8px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                    <span style={{ fontSize: '10px', letterSpacing: '2px', color: isSpeaking ? (allCallActive ? '#ff6666' : '#00ff66') : '#666' }}>
-                      {isSpeaking 
-                        ? `🎙️ TX → ${allCallActive ? '📢 ALL SQUADS' : getSpeakingChannels().map(ch => ch === COMMAND_NET_ID ? 'CMD NET' : teams.find(t => t.id === ch)?.name || ch).join(', ') || 'NONE'}`
+                    <span style={{ fontSize: '10px', letterSpacing: '2px', color: isSpeaking ? (noiseGateOpen ? (allCallActive ? '#ff6666' : '#00ff66') : '#888800') : '#666' }}>
+                      {isSpeaking
+                        ? `🎙️ ${noiseGateOpen ? 'TX' : 'GATE'} → ${allCallActive ? '📢 ALL SQUADS' : getSpeakingChannels().map(ch => ch === COMMAND_NET_ID ? 'CMD NET' : teams.find(t => t.id === ch)?.name || ch).join(', ') || 'NONE'}`
                         : '🎙️ TX OFF — Click speak button on a channel'
                       }
                     </span>
                     {isSpeaking && (
                       <>
-                        <div style={{ flex: 1, height: '8px', background: 'rgba(0,0,0,0.5)', borderRadius: '4px', overflow: 'hidden' }}>
-                          <div style={{ width: `${audioLevel * 100}%`, height: '100%', background: audioLevel > 0.7 ? 'linear-gradient(90deg, #00ff66, #ffff00, #ff3300)' : (allCallActive ? '#ff6666' : '#00ff66'), transition: 'width 0.05s' }} />
+                        <div style={{ flex: 1, height: '8px', background: 'rgba(0,0,0,0.5)', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                          {/* Threshold marker */}
+                          <div style={{ position: 'absolute', left: `${noiseGateThreshold}%`, top: 0, bottom: 0, width: '2px', background: '#ffaa00', zIndex: 2 }} />
+                          {/* Audio level bar */}
+                          <div style={{ width: `${audioLevel * 100}%`, height: '100%', background: noiseGateOpen ? (audioLevel > 0.7 ? 'linear-gradient(90deg, #00ff66, #ffff00, #ff3300)' : (allCallActive ? '#ff6666' : '#00ff66')) : '#666600', transition: 'width 0.05s' }} />
                         </div>
-                        <span style={{ fontSize: '11px', fontWeight: 'bold', color: audioLevel > 0.7 ? '#ff3300' : (allCallActive ? '#ff6666' : '#00ff66'), minWidth: '35px' }}>{Math.round(audioLevel * 100)}%</span>
+                        <span style={{ fontSize: '11px', fontWeight: 'bold', color: noiseGateOpen ? (audioLevel > 0.7 ? '#ff3300' : (allCallActive ? '#ff6666' : '#00ff66')) : '#888800', minWidth: '35px' }}>{Math.round(audioLevel * 100)}%</span>
                       </>
                     )}
+                  </div>
+                  {/* Noise Gate Sensitivity */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                    <span style={{ fontSize: '9px', color: '#888', letterSpacing: '1px', whiteSpace: 'nowrap' }}>🚪 GATE</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="50"
+                      value={noiseGateThreshold}
+                      onChange={(e) => setNoiseGateThreshold(parseInt(e.target.value))}
+                      style={{
+                        flex: 1,
+                        height: '20px',
+                        appearance: 'none',
+                        WebkitAppearance: 'none',
+                        background: `linear-gradient(to right, #666600 ${noiseGateThreshold * 2}%, rgba(100,100,100,0.3) ${noiseGateThreshold * 2}%)`,
+                        borderRadius: '4px',
+                        cursor: 'pointer'
+                      }}
+                    />
+                    <span style={{ fontSize: '9px', color: '#ffaa00', minWidth: '30px' }}>{noiseGateThreshold}%</span>
+                  </div>
+                  <div style={{ fontSize: '8px', color: '#5a6a5a', marginTop: '4px' }}>
+                    {noiseGateThreshold === 0 ? 'Gate off — all audio passes through' : `Blocks audio below ${noiseGateThreshold}% to reduce background noise`}
                   </div>
                 </div>
 
