@@ -140,6 +140,7 @@
       const analyserRef = useRef(null);
       const gainNodeRef = useRef(null);
       const processedStreamRef = useRef(null);
+      const noiseSuppressionRef = useRef(null); // Holds filter chain
       const animationRef = useRef(null);
       const isHostRef = useRef(false);
       const audioElementsRef = useRef(new Map()); // peerId -> Audio element
@@ -614,7 +615,7 @@
                 noiseSuppression: true,
                 autoGainControl: true,
                 channelCount: 1,           // Mono - half bandwidth
-                sampleRate: 24000,         // Voice optimized (better than 16k, lighter than 48k)
+                sampleRate: 48000,         // Higher sample rate for better filter quality
                 latency: 0,                // Request lowest latency
                 googHighpassFilter: true,  // Chrome-specific: filter low rumble
                 googTypingNoiseDetection: true
@@ -625,22 +626,72 @@
             // Set up audio processing pipeline
             audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
             const source = audioContextRef.current.createMediaStreamSource(stream);
+            const ctx = audioContextRef.current;
 
-            // Analyser for level metering (always receives audio)
-            analyserRef.current = audioContextRef.current.createAnalyser();
+            // === NOISE SUPPRESSION CHAIN ===
+
+            // 1. High-pass filter - removes low frequency rumble (AC hum, fans, traffic)
+            const highPass = ctx.createBiquadFilter();
+            highPass.type = 'highpass';
+            highPass.frequency.value = 85;  // Cut below 85Hz (voice starts ~85Hz)
+            highPass.Q.value = 0.7;
+
+            // 2. Low-pass filter - removes high frequency hiss
+            const lowPass = ctx.createBiquadFilter();
+            lowPass.type = 'lowpass';
+            lowPass.frequency.value = 8000;  // Cut above 8kHz (voice intelligibility range)
+            lowPass.Q.value = 0.7;
+
+            // 3. Notch filter - removes 60Hz electrical hum (and harmonics)
+            const notch60 = ctx.createBiquadFilter();
+            notch60.type = 'notch';
+            notch60.frequency.value = 60;
+            notch60.Q.value = 30;
+
+            const notch120 = ctx.createBiquadFilter();
+            notch120.type = 'notch';
+            notch120.frequency.value = 120;  // 2nd harmonic
+            notch120.Q.value = 30;
+
+            // 4. Compressor - normalizes levels and reduces dynamic range
+            const compressor = ctx.createDynamicsCompressor();
+            compressor.threshold.value = -24;   // Start compressing at -24dB
+            compressor.knee.value = 12;          // Soft knee for natural sound
+            compressor.ratio.value = 4;          // 4:1 compression ratio
+            compressor.attack.value = 0.003;     // Fast attack (3ms)
+            compressor.release.value = 0.15;     // Medium release (150ms)
+
+            // 5. Makeup gain after compression
+            const makeupGain = ctx.createGain();
+            makeupGain.gain.value = 1.5;  // Boost to compensate for compression
+
+            // Store refs for potential future control
+            noiseSuppressionRef.current = { highPass, lowPass, notch60, notch120, compressor, makeupGain };
+
+            // Connect the noise suppression chain
+            source.connect(highPass);
+            highPass.connect(lowPass);
+            lowPass.connect(notch60);
+            notch60.connect(notch120);
+            notch120.connect(compressor);
+            compressor.connect(makeupGain);
+
+            // Analyser for level metering (receives cleaned audio)
+            analyserRef.current = ctx.createAnalyser();
             analyserRef.current.fftSize = 256;
-            source.connect(analyserRef.current);
+            makeupGain.connect(analyserRef.current);
 
             // Gain node for noise gate control
-            gainNodeRef.current = audioContextRef.current.createGain();
+            gainNodeRef.current = ctx.createGain();
             gainNodeRef.current.gain.value = 0; // Start muted
-            source.connect(gainNodeRef.current);
+            makeupGain.connect(gainNodeRef.current);
 
             // Create processed stream for peer connections
-            const destination = audioContextRef.current.createMediaStreamDestination();
+            const destination = ctx.createMediaStreamDestination();
             gainNodeRef.current.connect(destination);
             processedStreamRef.current = destination.stream;
 
+            console.log('[Audio] Noise suppression chain initialized');
             return processedStreamRef.current;
           } catch (err) {
             setError('Microphone access required');
@@ -998,6 +1049,7 @@
         if (audioContextRef.current) { audioContextRef.current.close(); audioContextRef.current = null; }
         gainNodeRef.current = null;
         analyserRef.current = null;
+        noiseSuppressionRef.current = null;
         if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
         setSessionState('lobby');
         setSessionCode('');
