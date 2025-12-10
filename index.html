@@ -1528,8 +1528,112 @@
                   </div>
                 )}
 
-                {/* Commander's Board - visible to all, editable by commander */}
-                {(boardContent || myRole === 'commander') && (
+                {/* Commander's Board - fixed sidebar on right (desktop) or inline (mobile) */}
+                {(boardContent || myRole === 'commander') && !isMobile && (
+                  <div style={{
+                    position: 'fixed',
+                    top: '20px',
+                    right: boardExpanded ? '20px' : '-240px',
+                    width: '280px',
+                    maxHeight: 'calc(100vh - 40px)',
+                    background: 'rgba(5,15,25,0.95)',
+                    border: '1px solid rgba(100,150,255,0.3)',
+                    borderRadius: '10px',
+                    zIndex: 100,
+                    transition: 'right 0.3s ease',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.5)'
+                  }}>
+                    {/* Toggle tab */}
+                    <div
+                      onClick={() => setBoardExpanded(!boardExpanded)}
+                      style={{
+                        position: 'absolute',
+                        left: '-32px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'rgba(5,15,25,0.95)',
+                        border: '1px solid rgba(100,150,255,0.3)',
+                        borderRight: 'none',
+                        borderRadius: '6px 0 0 6px',
+                        padding: '12px 8px',
+                        cursor: 'pointer',
+                        writingMode: 'vertical-rl',
+                        textOrientation: 'mixed',
+                        fontSize: '10px',
+                        letterSpacing: '1px',
+                        color: '#88aaff',
+                        userSelect: 'none'
+                      }}
+                    >
+                      📋 {boardExpanded ? '▶' : '◀'}
+                    </div>
+
+                    {/* Header */}
+                    <div style={{
+                      padding: '12px 15px',
+                      background: 'rgba(0,0,0,0.3)',
+                      borderBottom: '1px solid rgba(100,150,255,0.2)',
+                      fontSize: '10px',
+                      letterSpacing: '2px',
+                      color: '#88aaff'
+                    }}>
+                      📋 COMMANDER'S BOARD
+                    </div>
+
+                    {/* Content */}
+                    <div style={{ flex: 1, overflow: 'auto', padding: '12px' }}>
+                      {myRole === 'commander' ? (
+                        <>
+                          <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                            <button onClick={() => document.execCommand('bold')} style={{ padding: '5px 8px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer', fontFamily: 'inherit' }}>B</button>
+                            <button onClick={() => document.execCommand('italic')} style={{ padding: '5px 8px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '11px', fontStyle: 'italic', cursor: 'pointer', fontFamily: 'inherit' }}>I</button>
+                            <button onClick={() => document.execCommand('underline')} style={{ padding: '5px 8px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '11px', textDecoration: 'underline', cursor: 'pointer', fontFamily: 'inherit' }}>U</button>
+                            <button onClick={() => document.execCommand('formatBlock', false, 'h2')} style={{ padding: '5px 8px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '10px', cursor: 'pointer', fontFamily: 'inherit' }}>H1</button>
+                            <button onClick={() => document.execCommand('formatBlock', false, 'h3')} style={{ padding: '5px 8px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '9px', cursor: 'pointer', fontFamily: 'inherit' }}>H2</button>
+                          </div>
+                          <div
+                            ref={boardEditorRef}
+                            contentEditable
+                            onBlur={(e) => broadcastBoard(e.target.innerHTML)}
+                            suppressContentEditableWarning={true}
+                            style={{
+                              minHeight: '200px',
+                              padding: '10px',
+                              background: 'rgba(0,0,0,0.3)',
+                              border: '1px solid rgba(100,150,255,0.2)',
+                              borderRadius: '6px',
+                              color: '#e0ffe0',
+                              fontSize: '12px',
+                              lineHeight: '1.5',
+                              outline: 'none',
+                              fontFamily: 'inherit'
+                            }}
+                          />
+                          <div style={{ fontSize: '8px', color: '#5a7a8a', marginTop: '6px' }}>
+                            Syncs when you click away
+                          </div>
+                        </>
+                      ) : (
+                        <div
+                          dangerouslySetInnerHTML={{ __html: boardContent || '<span style="color:#5a7a8a">No orders posted</span>' }}
+                          style={{
+                            padding: '10px',
+                            background: 'rgba(0,0,0,0.2)',
+                            borderRadius: '6px',
+                            color: '#e0ffe0',
+                            fontSize: '12px',
+                            lineHeight: '1.5'
+                          }}
+                        />
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Mobile: Commander's Board inline */}
+                {(boardContent || myRole === 'commander') && isMobile && (
                   <div style={{
                     background: 'rgba(0,20,40,0.4)',
                     border: '1px solid rgba(100,150,255,0.3)',
@@ -1543,7 +1647,7 @@
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        padding: isMobile ? '12px 15px' : '10px 15px',
+                        padding: '12px 15px',
                         background: 'rgba(0,0,0,0.2)',
                         cursor: 'pointer',
                         userSelect: 'none'
@@ -1556,26 +1660,21 @@
                         {boardExpanded ? '▼' : '▶'}
                       </span>
                     </div>
-
                     {boardExpanded && (
-                      <div style={{ padding: isMobile ? '12px' : '15px' }}>
+                      <div style={{ padding: '12px' }}>
                         {myRole === 'commander' ? (
                           <>
                             <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
-                              <button onClick={() => document.execCommand('bold')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', fontFamily: 'inherit' }}>B</button>
-                              <button onClick={() => document.execCommand('italic')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '12px', fontStyle: 'italic', cursor: 'pointer', fontFamily: 'inherit' }}>I</button>
-                              <button onClick={() => document.execCommand('underline')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '12px', textDecoration: 'underline', cursor: 'pointer', fontFamily: 'inherit' }}>U</button>
-                              <div style={{ width: '1px', background: 'rgba(255,255,255,0.2)', margin: '0 4px' }} />
-                              <button onClick={() => document.execCommand('formatBlock', false, 'h2')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit' }}>H1</button>
-                              <button onClick={() => document.execCommand('formatBlock', false, 'h3')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '10px', cursor: 'pointer', fontFamily: 'inherit' }}>H2</button>
-                              <button onClick={() => document.execCommand('formatBlock', false, 'p')} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '10px', cursor: 'pointer', fontFamily: 'inherit' }}>¶</button>
+                              <button onClick={() => document.execCommand('bold')} style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', fontFamily: 'inherit' }}>B</button>
+                              <button onClick={() => document.execCommand('italic')} style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '12px', fontStyle: 'italic', cursor: 'pointer', fontFamily: 'inherit' }}>I</button>
+                              <button onClick={() => document.execCommand('underline')} style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '12px', textDecoration: 'underline', cursor: 'pointer', fontFamily: 'inherit' }}>U</button>
+                              <button onClick={() => document.execCommand('formatBlock', false, 'h2')} style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit' }}>H1</button>
+                              <button onClick={() => document.execCommand('formatBlock', false, 'h3')} style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', color: '#ccc', fontSize: '10px', cursor: 'pointer', fontFamily: 'inherit' }}>H2</button>
                             </div>
                             <div
-                              ref={boardEditorRef}
                               contentEditable
                               onBlur={(e) => broadcastBoard(e.target.innerHTML)}
                               suppressContentEditableWarning={true}
-                              data-placeholder="Enter mission briefing, objectives, standing orders..."
                               style={{
                                 minHeight: '100px',
                                 padding: '12px',
@@ -1589,9 +1688,6 @@
                                 fontFamily: 'inherit'
                               }}
                             />
-                            <div style={{ fontSize: '9px', color: '#5a7a8a', marginTop: '8px', textAlign: 'right' }}>
-                              Changes sync automatically when you click away
-                            </div>
                           </>
                         ) : (
                           <div
