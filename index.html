@@ -723,7 +723,15 @@
             notch120.frequency.value = 120;  // 2nd harmonic
             notch120.Q.value = 30;
 
-            // 4. Compressor - normalizes levels and reduces dynamic range
+            // 4. Transient Suppressor - catches sharp clicks before they get through
+            const transientSuppressor = ctx.createDynamicsCompressor();
+            transientSuppressor.threshold.value = -35;  // Catch quieter transients
+            transientSuppressor.knee.value = 0;          // Hard knee for aggressive clamping
+            transientSuppressor.ratio.value = 20;        // Squash hard (20:1)
+            transientSuppressor.attack.value = 0.001;    // Ultra-fast attack (1ms) - catches clicks
+            transientSuppressor.release.value = 0.05;    // Fast release (50ms) - doesn't affect voice
+
+            // 5. Compressor - normalizes levels and reduces dynamic range
             const compressor = ctx.createDynamicsCompressor();
             compressor.threshold.value = -24;   // Start compressing at -24dB
             compressor.knee.value = 12;          // Soft knee for natural sound
@@ -731,19 +739,20 @@
             compressor.attack.value = 0.003;     // Fast attack (3ms)
             compressor.release.value = 0.15;     // Medium release (150ms)
 
-            // 5. Makeup gain after compression
+            // 6. Makeup gain after compression
             const makeupGain = ctx.createGain();
             makeupGain.gain.value = 1.5;  // Boost to compensate for compression
 
             // Store refs for potential future control
-            noiseSuppressionRef.current = { highPass, lowPass, notch60, notch120, compressor, makeupGain };
+            noiseSuppressionRef.current = { highPass, lowPass, notch60, notch120, transientSuppressor, compressor, makeupGain };
 
             // Connect the noise suppression chain (audioInput is either source or RNNoise output)
             audioInput.connect(highPass);
             highPass.connect(lowPass);
             lowPass.connect(notch60);
             notch60.connect(notch120);
-            notch120.connect(compressor);
+            notch120.connect(transientSuppressor);
+            transientSuppressor.connect(compressor);
             compressor.connect(makeupGain);
 
             // Analyser for level metering (receives cleaned audio)
@@ -1058,12 +1067,21 @@
             lowPass.frequency.value = 8000;
             lowPass.Q.value = 0.7;
 
-            // Connect: input -> highpass -> lowpass -> destination
+            // Transient Suppressor - catches sharp keyboard/mouse clicks
+            const transientSuppressor = ctx.createDynamicsCompressor();
+            transientSuppressor.threshold.value = -35;  // Catch quieter transients
+            transientSuppressor.knee.value = 0;          // Hard knee for aggressive clamping
+            transientSuppressor.ratio.value = 20;        // Squash hard (20:1)
+            transientSuppressor.attack.value = 0.001;    // Ultra-fast attack (1ms)
+            transientSuppressor.release.value = 0.05;    // Fast release (50ms)
+
+            // Connect: input -> highpass -> lowpass -> transient suppressor -> destination
             audioInput.connect(highPass);
             highPass.connect(lowPass);
+            lowPass.connect(transientSuppressor);
 
             const destination = ctx.createMediaStreamDestination();
-            lowPass.connect(destination);
+            transientSuppressor.connect(destination);
 
             // Use processed stream instead of raw remote stream
             audioEl.srcObject = destination.stream;
