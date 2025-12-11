@@ -357,10 +357,11 @@
 
       useEffect(() => {
         if (sessionState !== 'lobby') {
-          const channels = getSpeakingChannels();
+          // Broadcast based on actual speaking state (includes PTT check)
+          const channels = isSpeaking ? getSpeakingChannels() : [];
           broadcastSpeakingState(channels);
         }
-      }, [channelStates, sessionState, globalMute, allCallActive, getSpeakingChannels, broadcastSpeakingState]);
+      }, [channelStates, sessionState, globalMute, allCallActive, isSpeaking, getSpeakingChannels, broadcastSpeakingState]);
 
       // Toggle channel listen/speak
       const toggleChannelListen = (channelId) => {
@@ -898,13 +899,21 @@
           });
 
           // === MESH NETWORKING: Non-hosts connect to new user ===
+          // Use deterministic rule to avoid race condition: lower peer ID initiates
           if (!isHostRef.current && data.peerId !== peerRef.current?.id && !connectionsRef.current.has(data.peerId)) {
-            console.log('[Mesh] New user joined, connecting to:', data.username, data.peerId);
-            try {
-              const conn = peerRef.current.connect(data.peerId, { reliable: true });
-              setupConnection(conn);
-            } catch (err) {
-              console.warn('[Mesh] Failed to connect to new user', data.username, err);
+            const myId = peerRef.current?.id || '';
+            const theirId = data.peerId || '';
+            // Only initiate if my ID is lexicographically smaller
+            if (myId < theirId) {
+              console.log('[Mesh] New user joined, I will initiate connection to:', data.username, data.peerId);
+              try {
+                const conn = peerRef.current.connect(data.peerId, { reliable: true });
+                setupConnection(conn);
+              } catch (err) {
+                console.warn('[Mesh] Failed to connect to new user', data.username, err);
+              }
+            } else {
+              console.log('[Mesh] New user joined, waiting for them to connect:', data.username, data.peerId);
             }
           }
 
@@ -961,16 +970,23 @@
           }
 
           // === MESH NETWORKING: Connect to all other users ===
+          // Use deterministic rule to avoid race condition: lower peer ID initiates
+          const myId = peerRef.current?.id || '';
           usersWithDefaults.forEach(async (user) => {
             // Skip self, host (already connected), and users we're already connected to
             if (user.peerId === peerRef.current?.id || user.isHost || connectionsRef.current.has(user.peerId)) return;
 
-            console.log('[Mesh] Connecting to peer:', user.username, user.peerId);
-            try {
-              const conn = peerRef.current.connect(user.peerId, { reliable: true });
-              setupConnection(conn);
-            } catch (err) {
-              console.warn('[Mesh] Failed to connect to', user.username, err);
+            // Only initiate if my ID is lexicographically smaller
+            if (myId < user.peerId) {
+              console.log('[Mesh] Connecting to peer (I initiate):', user.username, user.peerId);
+              try {
+                const conn = peerRef.current.connect(user.peerId, { reliable: true });
+                setupConnection(conn);
+              } catch (err) {
+                console.warn('[Mesh] Failed to connect to', user.username, err);
+              }
+            } else {
+              console.log('[Mesh] Waiting for peer to connect to me:', user.username, user.peerId);
             }
           });
         } else if (data.type === 'teams-update') {
