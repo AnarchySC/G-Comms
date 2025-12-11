@@ -726,9 +726,9 @@
 
             // 4. Transient Suppressor - catches sharp clicks before they get through
             const transientSuppressor = ctx.createDynamicsCompressor();
-            transientSuppressor.threshold.value = -35;  // Catch quieter transients
-            transientSuppressor.knee.value = 0;          // Hard knee for aggressive clamping
-            transientSuppressor.ratio.value = 20;        // Squash hard (20:1)
+            transientSuppressor.threshold.value = -20;  // Less aggressive threshold
+            transientSuppressor.knee.value = 6;          // Softer knee
+            transientSuppressor.ratio.value = 8;         // Moderate ratio (8:1)
             transientSuppressor.attack.value = 0.001;    // Ultra-fast attack (1ms) - catches clicks
             transientSuppressor.release.value = 0.05;    // Fast release (50ms) - doesn't affect voice
 
@@ -1070,9 +1070,9 @@
 
             // Transient Suppressor - catches sharp keyboard/mouse clicks
             const transientSuppressor = ctx.createDynamicsCompressor();
-            transientSuppressor.threshold.value = -35;  // Catch quieter transients
-            transientSuppressor.knee.value = 0;          // Hard knee for aggressive clamping
-            transientSuppressor.ratio.value = 20;        // Squash hard (20:1)
+            transientSuppressor.threshold.value = -20;  // Less aggressive threshold
+            transientSuppressor.knee.value = 6;          // Softer knee
+            transientSuppressor.ratio.value = 8;         // Moderate ratio (8:1)
             transientSuppressor.attack.value = 0.001;    // Ultra-fast attack (1ms)
             transientSuppressor.release.value = 0.05;    // Fast release (50ms)
 
