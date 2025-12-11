@@ -66,11 +66,11 @@
     @keyframes glow { 0%, 100% { box-shadow: 0 0 20px rgba(0,255,100,0.2); } 50% { box-shadow: 0 0 30px rgba(0,255,100,0.4); } }
     @keyframes flashAlert { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
     @keyframes soundWave { 0%, 100% { height: 4px; } 50% { height: 16px; } }
-    .user-chip { cursor: grab; user-select: none; transition: all 0.2s; padding: 16px !important; min-height: 60px; }
-    .user-chip:active { cursor: grabbing; transform: scale(1.05); }
-    .user-chip:hover { background: rgba(0,255,100,0.1) !important; border-color: rgba(0,255,100,0.4) !important; }
-    .channel-drop-zone { transition: all 0.2s; min-height: 120px; }
-    .channel-drop-zone.drag-over { background: rgba(0,255,100,0.15) !important; border-color: rgba(0,255,100,0.6) !important; transform: scale(1.02); }
+    .user-chip { cursor: grab; user-select: none; transition: all 0.2s; padding: 14px 18px !important; min-height: 50px; min-width: 120px; }
+    .user-chip:active { cursor: grabbing; transform: scale(1.08); box-shadow: 0 4px 20px rgba(0,255,100,0.3); }
+    .user-chip:hover { background: rgba(0,255,100,0.15) !important; border-color: rgba(0,255,100,0.5) !important; }
+    .channel-drop-zone { transition: all 0.2s; min-height: 150px; }
+    .channel-drop-zone.drag-over { background: rgba(0,255,100,0.2) !important; border-color: #00ff66 !important; transform: scale(1.01); box-shadow: 0 0 30px rgba(0,255,100,0.3); }
     
     /* Mobile-specific styles */
     @media (max-width: 768px) {
@@ -1619,8 +1619,28 @@
                   })}
                 </div>
               )}
+
+              {/* Drop zone indicator - always visible for commander on non-Command Net channels */}
+              {isHostRef.current && !isCommandNet && !isMobile && (
+                <div
+                  style={{
+                    marginTop: '12px',
+                    padding: '16px',
+                    border: `2px dashed ${draggedUser ? 'rgba(0,255,100,0.6)' : 'rgba(100,100,100,0.3)'}`,
+                    borderRadius: '8px',
+                    background: draggedUser ? 'rgba(0,255,100,0.1)' : 'rgba(0,0,0,0.2)',
+                    textAlign: 'center',
+                    fontSize: '11px',
+                    color: draggedUser ? '#00ff66' : '#4a6a4a',
+                    letterSpacing: '1px',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  {draggedUser ? '⬇️ DROP HERE' : '+ DRAG OPERATOR HERE'}
+                </div>
+              )}
             </div>
-            
+
           </div>
         );
       };
