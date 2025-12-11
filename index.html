@@ -830,7 +830,18 @@
             }
             return prev;
           });
-          
+
+          // === MESH NETWORKING: Non-hosts connect to new user ===
+          if (!isHostRef.current && data.peerId !== peerRef.current?.id && !connectionsRef.current.has(data.peerId)) {
+            console.log('[Mesh] New user joined, connecting to:', data.username, data.peerId);
+            try {
+              const conn = peerRef.current.connect(data.peerId, { reliable: true });
+              setupConnection(conn);
+            } catch (err) {
+              console.warn('[Mesh] Failed to connect to new user', data.username, err);
+            }
+          }
+
           // Host-specific: send sync state to new user and notify others
           if (isHostRef.current) {
             const conn = connectionsRef.current.get(fromPeerId)?.conn;
@@ -882,6 +893,20 @@
           if (data.boardContent) {
             setBoardContent(data.boardContent);
           }
+
+          // === MESH NETWORKING: Connect to all other users ===
+          usersWithDefaults.forEach(async (user) => {
+            // Skip self, host (already connected), and users we're already connected to
+            if (user.peerId === peerRef.current?.id || user.isHost || connectionsRef.current.has(user.peerId)) return;
+
+            console.log('[Mesh] Connecting to peer:', user.username, user.peerId);
+            try {
+              const conn = peerRef.current.connect(user.peerId, { reliable: true });
+              setupConnection(conn);
+            } catch (err) {
+              console.warn('[Mesh] Failed to connect to', user.username, err);
+            }
+          });
         } else if (data.type === 'teams-update') {
           setTeams(data.teams);
         } else if (data.type === 'board-update') {
