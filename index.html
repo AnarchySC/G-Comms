@@ -131,7 +131,12 @@
       const [reconnectAttempts, setReconnectAttempts] = useState(0);
       const [boardContent, setBoardContent] = useState(''); // Commander's board HTML content
       const [boardExpanded, setBoardExpanded] = useState(true); // Toggle board visibility
-      
+
+      // PTT (Push-to-Talk) settings
+      const [pttKey, setPttKey] = useState(() => localStorage.getItem('gcomms-ptt-key') || '`');
+      const [pttActive, setPttActive] = useState(false);
+      const [configuringPtt, setConfiguringPtt] = useState(false);
+
       const peerRef = useRef(null);
       const reconnectTimeoutRef = useRef(null);
       const heartbeatIntervalRef = useRef(null);
@@ -211,13 +216,14 @@
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
       }, [sessionState]);
 
-      // Check if currently speaking on any channel
+      // Check if currently speaking on any channel (requires PTT to be held)
       const isSpeaking = useMemo(() => {
         if (globalMute) return false;
-        if (allCallActive && myRole === 'commander') return true;
+        if (allCallActive && myRole === 'commander') return true; // ALL-CALL is toggle-based, not PTT
+        if (!pttActive) return false; // PTT must be held to speak
         if (!channelStates || Object.keys(channelStates).length === 0) return false;
         return Object.values(channelStates).some(s => s && s.speak === true);
-      }, [globalMute, allCallActive, myRole, channelStates]);
+      }, [globalMute, allCallActive, myRole, channelStates, pttActive]);
       
       // Get channels I'm speaking to
       const getSpeakingChannels = useCallback(() => {
@@ -538,6 +544,56 @@
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
       }, [sessionState, broadcastWhistle, broadcastStatus]);
+
+      // PTT Key Handler
+      useEffect(() => {
+        if (sessionState === 'lobby') return;
+
+        const handlePttKeyDown = (e) => {
+          // If configuring PTT, capture the key
+          if (configuringPtt) {
+            e.preventDefault();
+            const keyName = e.key === ' ' ? 'Space' : e.key;
+            setPttKey(keyName);
+            localStorage.setItem('gcomms-ptt-key', keyName);
+            setConfiguringPtt(false);
+            return;
+          }
+
+          // Skip if in input field
+          if (e.target.tagName === 'INPUT' || e.target.contentEditable === 'true') return;
+
+          // Check for PTT key
+          const keyName = e.key === ' ' ? 'Space' : e.key;
+          if (keyName === pttKey || e.key === pttKey) {
+            e.preventDefault();
+            setPttActive(true);
+          }
+        };
+
+        const handlePttKeyUp = (e) => {
+          if (e.target.tagName === 'INPUT' || e.target.contentEditable === 'true') return;
+
+          const keyName = e.key === ' ' ? 'Space' : e.key;
+          if (keyName === pttKey || e.key === pttKey) {
+            e.preventDefault();
+            setPttActive(false);
+          }
+        };
+
+        // Also handle window blur (release PTT if window loses focus)
+        const handleBlur = () => setPttActive(false);
+
+        window.addEventListener('keydown', handlePttKeyDown);
+        window.addEventListener('keyup', handlePttKeyUp);
+        window.addEventListener('blur', handleBlur);
+
+        return () => {
+          window.removeEventListener('keydown', handlePttKeyDown);
+          window.removeEventListener('keyup', handlePttKeyUp);
+          window.removeEventListener('blur', handleBlur);
+        };
+      }, [sessionState, pttKey, configuringPtt]);
 
       const generateCode = () => {
         const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -1772,7 +1828,9 @@
                     <span style={{ fontSize: '10px', letterSpacing: '2px', color: isSpeaking ? (noiseGateOpen ? (allCallActive ? '#ff6666' : '#00ff66') : '#888800') : '#666' }}>
                       {isSpeaking
                         ? `🎙️ ${noiseGateOpen ? 'TX' : 'GATE'} → ${allCallActive ? '📢 ALL SQUADS' : getSpeakingChannels().map(ch => ch === COMMAND_NET_ID ? 'CMD NET' : teams.find(t => t.id === ch)?.name || ch).join(', ') || 'NONE'}`
-                        : '🎙️ TX OFF — Click speak button on a channel'
+                        : pttActive
+                          ? '🎙️ PTT HELD — Enable speak on a channel'
+                          : `🎙️ TX OFF — Hold [${pttKey === ' ' ? 'Space' : pttKey.toUpperCase()}] to talk`
                       }
                     </span>
                     {isSpeaking && (
@@ -1810,6 +1868,31 @@
                   </div>
                   <div style={{ fontSize: '8px', color: '#5a6a5a', marginTop: '4px' }}>
                     {noiseGateThreshold === 0 ? 'Gate off — all audio passes through' : `Blocks audio below ${noiseGateThreshold}% to reduce background noise`}
+                  </div>
+                  {/* PTT Key Configuration */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                    <span style={{ fontSize: '9px', color: '#888', letterSpacing: '1px', whiteSpace: 'nowrap' }}>🎤 PTT KEY</span>
+                    <button
+                      onClick={() => setConfiguringPtt(true)}
+                      style={{
+                        flex: 1,
+                        padding: '8px 12px',
+                        background: configuringPtt ? 'rgba(255,100,100,0.2)' : (pttActive ? 'rgba(0,255,100,0.2)' : 'rgba(0,0,0,0.3)'),
+                        border: `1px solid ${configuringPtt ? '#ff6666' : (pttActive ? '#00ff66' : 'rgba(100,100,100,0.3)')}`,
+                        borderRadius: '6px',
+                        color: configuringPtt ? '#ff6666' : (pttActive ? '#00ff66' : '#aaa'),
+                        fontSize: '12px',
+                        fontFamily: 'inherit',
+                        cursor: 'pointer',
+                        textAlign: 'center'
+                      }}
+                    >
+                      {configuringPtt ? '⌨️ Press any key...' : `[ ${pttKey === ' ' ? 'Space' : pttKey.toUpperCase()} ]`}
+                    </button>
+                    {pttActive && <span style={{ fontSize: '10px', color: '#00ff66', animation: 'pulse 0.5s infinite' }}>● ACTIVE</span>}
+                  </div>
+                  <div style={{ fontSize: '8px', color: '#5a6a5a', marginTop: '4px' }}>
+                    Hold to talk • Enable speak on channel first • Click button to change key
                   </div>
                 </div>
 
