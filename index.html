@@ -935,9 +935,9 @@
       }, [username, getLocalStream, handleData]);
 
       const setupCall = useCallback((call) => {
-        call.on('stream', (remoteStream) => {
+        call.on('stream', async (remoteStream) => {
           console.log('Got audio stream from:', call.peer);
-          
+
           // Create or get audio element for this peer
           let audioEl = audioElementsRef.current.get(call.peer);
           if (!audioEl) {
@@ -946,16 +946,60 @@
             audioEl.muted = true; // Start muted, updateAudioRouting will unmute if needed
             audioElementsRef.current.set(call.peer, audioEl);
           }
-          
-          audioEl.srcObject = remoteStream;
+
+          // === RECEIVE-SIDE NOISE SUPPRESSION ===
+          try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = ctx.createMediaStreamSource(remoteStream);
+            let audioInput = source;
+
+            // Try to use RNNoise for incoming audio
+            try {
+              if (window.RnnoiseWasm && window.RnnoiseWasm.createRnnoiseNode) {
+                const rnnoiseNode = await window.RnnoiseWasm.createRnnoiseNode(ctx);
+                source.connect(rnnoiseNode);
+                audioInput = rnnoiseNode;
+                console.log('[Audio] RNNoise enabled for incoming audio from:', call.peer);
+              }
+            } catch (e) {
+              console.warn('[Audio] RNNoise failed for incoming:', e);
+            }
+
+            // Apply filters to incoming audio
+            const highPass = ctx.createBiquadFilter();
+            highPass.type = 'highpass';
+            highPass.frequency.value = 85;
+            highPass.Q.value = 0.7;
+
+            const lowPass = ctx.createBiquadFilter();
+            lowPass.type = 'lowpass';
+            lowPass.frequency.value = 8000;
+            lowPass.Q.value = 0.7;
+
+            // Connect: input -> highpass -> lowpass -> destination
+            audioInput.connect(highPass);
+            highPass.connect(lowPass);
+
+            const destination = ctx.createMediaStreamDestination();
+            lowPass.connect(destination);
+
+            // Use processed stream instead of raw remote stream
+            audioEl.srcObject = destination.stream;
+            console.log('[Audio] Receive-side noise suppression active for:', call.peer);
+          } catch (err) {
+            // Fallback to raw stream if processing fails
+            console.warn('[Audio] Receive processing failed, using raw stream:', err);
+            audioEl.srcObject = remoteStream;
+          }
+
           audioEl.play().catch(e => console.log('Audio play error:', e));
-          
+
           connectionsRef.current.set(call.peer, { ...connectionsRef.current.get(call.peer), stream: remoteStream });
-          
+
           // Trigger routing update after a short delay
           setTimeout(() => updateAudioRouting(), 100);
         });
-        
+
         call.on('error', (err) => {
           console.error('Call error:', err);
         });
