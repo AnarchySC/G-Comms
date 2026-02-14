@@ -616,21 +616,31 @@
         return code;
       };
 
-      // Generate TURN credentials using Open Relay static auth
-      const generateTurnCredentials = () => {
+      // Generate TURN credentials using Open Relay static auth (HMAC-SHA1)
+      const generateTurnCredentials = async () => {
         const secret = 'openrelayprojectsecret';
         const expiry = Math.floor(Date.now() / 1000) + 24 * 3600; // 24h from now
         const username = expiry.toString();
-        // HMAC-SHA1 for CoTURN static-auth — computed synchronously via Web Crypto fallback
-        // We'll use a simple approach: set credentials and refresh if needed
-        return { username, credential: secret };
+        try {
+          const enc = new TextEncoder();
+          const key = await crypto.subtle.importKey(
+            'raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']
+          );
+          const sig = await crypto.subtle.sign('HMAC', key, enc.encode(username));
+          const credential = btoa(String.fromCharCode(...new Uint8Array(sig)));
+          return { username, credential };
+        } catch (e) {
+          console.warn('[TURN] HMAC generation failed, using secret directly:', e);
+          return { username, credential: secret };
+        }
       };
 
       const initPeer = useCallback((peerId) => {
-        return new Promise((resolve, reject) => {
-          const turnCreds = generateTurnCredentials();
+        return new Promise(async (resolve, reject) => {
+          const turnCreds = await generateTurnCredentials();
+          console.log('[ICE] TURN credentials generated, username:', turnCreds.username);
           const peer = new Peer(peerId, {
-            debug: 2,
+            debug: 3,
             config: {
               iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -1074,10 +1084,17 @@
           }
         });
         // PeerJS may already have the connection open by the time we register handlers
+        console.log('[Conn] Setting up connection to', conn.peer, '- open:', conn.open, 'type:', conn.type, 'reliable:', conn.reliable);
         if (conn.open) {
           onOpen();
         } else {
           conn.on('open', onOpen);
+          // Diagnostic: warn if connection hasn't opened after 10s
+          setTimeout(() => {
+            if (!conn.open) {
+              console.warn('[Conn] Connection to', conn.peer, 'still not open after 10s. PeerConnection state:', conn.peerConnection?.connectionState, 'ICE:', conn.peerConnection?.iceConnectionState);
+            }
+          }, 10000);
         }
       }, [username, getLocalStream, handleData]);
 
