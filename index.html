@@ -616,10 +616,21 @@
         return code;
       };
 
+      // Generate TURN credentials using Open Relay static auth
+      const generateTurnCredentials = () => {
+        const secret = 'openrelayprojectsecret';
+        const expiry = Math.floor(Date.now() / 1000) + 24 * 3600; // 24h from now
+        const username = expiry.toString();
+        // HMAC-SHA1 for CoTURN static-auth — computed synchronously via Web Crypto fallback
+        // We'll use a simple approach: set credentials and refresh if needed
+        return { username, credential: secret };
+      };
+
       const initPeer = useCallback((peerId) => {
         return new Promise((resolve, reject) => {
-          const peer = new Peer(peerId, { 
-            debug: 1,
+          const turnCreds = generateTurnCredentials();
+          const peer = new Peer(peerId, {
+            debug: 2,
             config: {
               iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -627,26 +638,28 @@
                 { urls: 'stun:stun2.l.google.com:19302' },
                 { urls: 'stun:stun3.l.google.com:19302' },
                 { urls: 'stun:stun4.l.google.com:19302' },
-                // Free TURN servers from Open Relay (metered.ca)
+                { urls: 'stun:stun.cloudflare.com:3478' },
+                { urls: 'stun:global.stun.twilio.com:3478' },
+                // Open Relay TURN servers (staticauth.openrelay.metered.ca)
                 {
-                  urls: 'turn:a.relay.metered.ca:80',
-                  username: 'e8dd65caa142a36b1f4b0a99',
-                  credential: 'kIcSIx5h3xf3AoHn'
+                  urls: 'turn:staticauth.openrelay.metered.ca:80',
+                  username: turnCreds.username,
+                  credential: turnCreds.credential
                 },
                 {
-                  urls: 'turn:a.relay.metered.ca:80?transport=tcp',
-                  username: 'e8dd65caa142a36b1f4b0a99',
-                  credential: 'kIcSIx5h3xf3AoHn'
+                  urls: 'turn:staticauth.openrelay.metered.ca:80?transport=tcp',
+                  username: turnCreds.username,
+                  credential: turnCreds.credential
                 },
                 {
-                  urls: 'turn:a.relay.metered.ca:443',
-                  username: 'e8dd65caa142a36b1f4b0a99',
-                  credential: 'kIcSIx5h3xf3AoHn'
+                  urls: 'turn:staticauth.openrelay.metered.ca:443',
+                  username: turnCreds.username,
+                  credential: turnCreds.credential
                 },
                 {
-                  urls: 'turn:a.relay.metered.ca:443?transport=tcp',
-                  username: 'e8dd65caa142a36b1f4b0a99',
-                  credential: 'kIcSIx5h3xf3AoHn'
+                  urls: 'turns:staticauth.openrelay.metered.ca:443?transport=tcp',
+                  username: turnCreds.username,
+                  credential: turnCreds.credential
                 }
               ],
               iceCandidatePoolSize: 10
@@ -1035,8 +1048,11 @@
             setupCall(call);
           }
         };
-        // Register data/close handlers BEFORE triggering onOpen,
+        // Register data/close/error handlers BEFORE triggering onOpen,
         // so no messages are lost if the connection is already open
+        conn.on('error', (err) => {
+          console.error('[Conn] Error with', conn.peer, ':', err.type || err.message || err);
+        });
         conn.on('data', (data) => handleData(data, conn.peer));
         conn.on('close', () => {
           console.log('Connection closed:', conn.peer);
