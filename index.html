@@ -164,6 +164,7 @@
       const boardContentRef = useRef(boardContent);
       const boardEditorRef = useRef(null);
       const setupConnectionRef = useRef(null);
+      const setupCallRef = useRef(null);
       const reconnectAttemptsRef = useRef(0);
       const connectionHealthRef = useRef(connectionHealth);
 
@@ -1055,7 +1056,7 @@
           const stream = await getLocalStream();
           if (stream && peerRef.current) {
             const call = peerRef.current.call(conn.peer, stream);
-            setupCall(call);
+            setupCallRef.current(call);
           }
         };
         // Register data/close/error handlers BEFORE triggering onOpen,
@@ -1180,6 +1181,8 @@
         });
       }, [updateAudioRouting]);
 
+      useEffect(() => { setupCallRef.current = setupCall; }, [setupCall]);
+
       const hostSession = async () => {
         if (!username.trim()) { setError('Please enter your callsign'); return; }
         setError('');
@@ -1194,10 +1197,10 @@
           console.log('Got local stream for host');
           
           const peer = await initPeer(`gcomms-${code}-host`);
-          peer.on('connection', (conn) => { console.log('Incoming:', conn.peer); setupConnection(conn); });
+          peer.on('connection', (conn) => { console.log('Incoming:', conn.peer); setupConnectionRef.current(conn); });
           peer.on('call', async (call) => {
             const stream = await getLocalStream();
-            if (stream) { call.answer(stream); setupCall(call); }
+            if (stream) { call.answer(stream); setupCallRef.current(call); }
           });
           isHostRef.current = true;
           setSessionCode(code);
@@ -1237,15 +1240,15 @@
           console.log('Got local stream for joiner');
           
           const peer = await initPeer(uniqueId);
-          peer.on('connection', (conn) => setupConnection(conn));
+          peer.on('connection', (conn) => setupConnectionRef.current(conn));
           peer.on('call', async (call) => {
             const stream = await getLocalStream();
-            if (stream) { call.answer(stream); setupCall(call); }
+            if (stream) { call.answer(stream); setupCallRef.current(call); }
           });
           const hostPeerId = `gcomms-${code}-host`;
           const conn = peer.connect(hostPeerId, { reliable: true });
           conn.on('error', () => setError('Failed to connect'));
-          setupConnection(conn);
+          setupConnectionRef.current(conn);
           isHostRef.current = false;
           setSessionCode(code);
           setSessionState('joined');
