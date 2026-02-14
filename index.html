@@ -686,7 +686,11 @@
           peer.on('error', (err) => {
             console.error('Peer error:', err.type, err);
             if (err.type === 'unavailable-id') reject(new Error('Session code already in use'));
-            else if (err.type === 'peer-unavailable') reject(new Error('Session not found'));
+            else if (err.type === 'peer-unavailable') {
+              // This can fire after initPeer resolves (when connecting to a peer)
+              setError('Session not found — check the code or the host may have left.');
+              setConnectionHealth('good');
+            }
             else if (err.type === 'disconnected' || err.type === 'network') {
               setConnectionHealth('reconnecting');
               // Will be handled by reconnection logic
@@ -985,6 +989,9 @@
             });
           }
         } else if (data.type === 'sync-state') {
+          console.log('[Sync] Received sync-state from host, connected!');
+          setConnectionHealth('good');
+          setError('');
           setTeams(data.teams);
           // Ensure all users have required fields
           const usersWithDefaults = data.users.map(u => ({
@@ -1247,14 +1254,27 @@
           });
           const hostPeerId = `gcomms-${code}-host`;
           const conn = peer.connect(hostPeerId, { reliable: true });
-          conn.on('error', () => setError('Failed to connect'));
+          conn.on('error', (err) => {
+            console.error('[Join] Connection error:', err);
+            setError('Failed to connect to host. Check the session code.');
+          });
           setupConnectionRef.current(conn);
           isHostRef.current = false;
           setSessionCode(code);
           setSessionState('joined');
           setMyRole('operator');
+          setConnectionHealth('reconnecting'); // Show "connecting" until sync-state received
           requestWakeLock(); // Keep screen on
           setConnectedUsers([{ peerId: peer.id, username: username, status: 'standby', speaking: false, speakingChannels: [], channelId: null, role: 'operator' }]);
+
+          // Timeout: if we haven't received sync-state within 15s, warn user
+          setTimeout(() => {
+            if (!connectedUsersRef.current.find(u => u.isHost)) {
+              console.warn('[Join] No sync-state received from host after 15s');
+              setError('Could not reach host. The session may have ended, or a firewall is blocking the connection.');
+              setConnectionHealth('reconnecting');
+            }
+          }, 15000);
         } catch (err) { setError(err.message); }
       };
 
