@@ -1035,12 +1035,8 @@
             setupCall(call);
           }
         };
-        // PeerJS may already have the connection open by the time we register handlers
-        if (conn.open) {
-          onOpen();
-        } else {
-          conn.on('open', onOpen);
-        }
+        // Register data/close handlers BEFORE triggering onOpen,
+        // so no messages are lost if the connection is already open
         conn.on('data', (data) => handleData(data, conn.peer));
         conn.on('close', () => {
           console.log('Connection closed:', conn.peer);
@@ -1061,6 +1057,12 @@
             attemptReconnect();
           }
         });
+        // PeerJS may already have the connection open by the time we register handlers
+        if (conn.open) {
+          onOpen();
+        } else {
+          conn.on('open', onOpen);
+        }
       }, [username, getLocalStream, handleData]);
 
       useEffect(() => { setupConnectionRef.current = setupConnection; }, [setupConnection]);
