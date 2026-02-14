@@ -1017,13 +1017,13 @@
       }, [playWhistle]);
 
       const setupConnection = useCallback((conn) => {
-        conn.on('open', async () => {
+        const onOpen = async () => {
           console.log('Connection opened:', conn.peer);
           connectionsRef.current.set(conn.peer, { ...connectionsRef.current.get(conn.peer), conn });
-          conn.send({ 
-            type: 'user-joined', 
-            peerId: peerRef.current.id, 
-            username: username, 
+          conn.send({
+            type: 'user-joined',
+            peerId: peerRef.current.id,
+            username: username,
             status: myStatusRef.current,
             channelId: myChannelIdRef.current,
             role: myRoleRef.current,
@@ -1034,7 +1034,13 @@
             const call = peerRef.current.call(conn.peer, stream);
             setupCall(call);
           }
-        });
+        };
+        // PeerJS may already have the connection open by the time we register handlers
+        if (conn.open) {
+          onOpen();
+        } else {
+          conn.on('open', onOpen);
+        }
         conn.on('data', (data) => handleData(data, conn.peer));
         conn.on('close', () => {
           console.log('Connection closed:', conn.peer);
