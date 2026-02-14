@@ -163,6 +163,9 @@
       const wakeLockRef = useRef(null);
       const boardContentRef = useRef(boardContent);
       const boardEditorRef = useRef(null);
+      const setupConnectionRef = useRef(null);
+      const reconnectAttemptsRef = useRef(0);
+      const connectionHealthRef = useRef(connectionHealth);
 
       // Wake Lock - prevent screen from sleeping during session
       const requestWakeLock = async () => {
@@ -199,6 +202,7 @@
       useEffect(() => { channelStatesRef.current = channelStates; }, [channelStates]);
       useEffect(() => { allCallActiveRef.current = allCallActive; }, [allCallActive]);
       useEffect(() => { boardContentRef.current = boardContent; }, [boardContent]);
+      useEffect(() => { connectionHealthRef.current = connectionHealth; }, [connectionHealth]);
       // Sync board content to editor when received from host (but not when we're editing)
       useEffect(() => {
         if (boardEditorRef.current && document.activeElement !== boardEditorRef.current) {
@@ -229,20 +233,28 @@
       // Get channels I'm speaking to
       const getSpeakingChannels = useCallback(() => {
         if (globalMute) return [];
-        
+
         // If ALL-CALL is active (commander only), return all squad channels
         if (allCallActive && myRoleRef.current === 'commander') {
           return teamsRef.current.map(t => t.id);
         }
-        
+
         if (!channelStates || Object.keys(channelStates).length === 0) {
           return [];
         }
-        
+
         const channels = [];
         Object.entries(channelStates).forEach(([id, state]) => {
           if (state && state.speak) {
-            channels.push(id === COMMAND_NET_ID ? COMMAND_NET_ID : parseInt(id));
+            const chId = id === COMMAND_NET_ID ? COMMAND_NET_ID : parseInt(id);
+            // Commanders can speak on any channel they have enabled
+            if (myRoleRef.current === 'commander') {
+              channels.push(chId);
+            } else if (chId === COMMAND_NET_ID) {
+              channels.push(chId); // command net if allowed
+            } else if (chId === myChannelIdRef.current) {
+              channels.push(chId); // only their assigned channel
+            }
           }
         });
         return channels;
@@ -640,11 +652,12 @@
               iceCandidatePoolSize: 10
             }
           });
-          peer.on('open', (id) => { 
-            console.log('Connected:', id); 
+          peer.on('open', (id) => {
+            console.log('Connected:', id);
             setConnectionHealth('good');
+            reconnectAttemptsRef.current = 0;
             setReconnectAttempts(0);
-            resolve(peer); 
+            resolve(peer);
           });
           peer.on('error', (err) => {
             console.error('Peer error:', err.type, err);
@@ -867,13 +880,15 @@
           if (data.peerId === peerRef.current?.id) {
             console.log('I was moved to channel:', data.channelId);
             setMyChannelId(data.channelId);
-            // Enable listen/speak on assigned channel
+            // Clear old channel states, set new one
             setChannelStates(prev => {
-              const newState = {
-                ...prev,
-                [data.channelId]: { listen: true, speak: true }
-              };
-              console.log('New channelStates:', newState);
+              const newState = {};
+              // Preserve command-net state if squad leader+
+              if (prev[COMMAND_NET_ID]) {
+                newState[COMMAND_NET_ID] = prev[COMMAND_NET_ID];
+              }
+              // Only enable new channel
+              newState[data.channelId] = { listen: true, speak: true };
               return newState;
             });
           }
@@ -908,7 +923,7 @@
               console.log('[Mesh] New user joined, I will initiate connection to:', data.username, data.peerId);
               try {
                 const conn = peerRef.current.connect(data.peerId, { reliable: true });
-                setupConnection(conn);
+                setupConnectionRef.current(conn);
               } catch (err) {
                 console.warn('[Mesh] Failed to connect to new user', data.username, err);
               }
@@ -981,7 +996,7 @@
               console.log('[Mesh] Connecting to peer (I initiate):', user.username, user.peerId);
               try {
                 const conn = peerRef.current.connect(user.peerId, { reliable: true });
-                setupConnection(conn);
+                setupConnectionRef.current(conn);
               } catch (err) {
                 console.warn('[Mesh] Failed to connect to', user.username, err);
               }
@@ -1041,6 +1056,8 @@
           }
         });
       }, [username, getLocalStream, handleData]);
+
+      useEffect(() => { setupConnectionRef.current = setupConnection; }, [setupConnection]);
 
       const setupCall = useCallback((call) => {
         call.on('stream', async (remoteStream) => {
@@ -1113,8 +1130,8 @@
 
           connectionsRef.current.set(call.peer, { ...connectionsRef.current.get(call.peer), stream: remoteStream });
 
-          // Trigger routing update after a short delay
-          setTimeout(() => updateAudioRouting(), 100);
+          // Call routing update on next microtask to ensure ref is set
+          Promise.resolve().then(() => updateAudioRouting());
         });
 
         call.on('error', (err) => {
@@ -1235,6 +1252,7 @@
         setAllCallActive(false);
         setBoardContent('');
         setConnectionHealth('good');
+        reconnectAttemptsRef.current = 0;
         setReconnectAttempts(0);
         isHostRef.current = false;
         releaseWakeLock(); // Allow screen to sleep again
@@ -1248,37 +1266,41 @@
       // Auto-reconnect with exponential backoff
       const attemptReconnect = useCallback(async () => {
         const maxAttempts = 5;
-        const currentAttempt = reconnectAttempts + 1;
-        
+        reconnectAttemptsRef.current += 1;
+        const currentAttempt = reconnectAttemptsRef.current;
+
         if (currentAttempt > maxAttempts) {
           console.log('Max reconnect attempts reached');
+          reconnectAttemptsRef.current = 0;
+          setReconnectAttempts(0);
           setError('Connection lost. Please rejoin the session.');
           setConnectionHealth('good');
           setSessionState('lobby');
           return;
         }
-        
+
         setReconnectAttempts(currentAttempt);
         const backoffMs = Math.min(1000 * Math.pow(2, currentAttempt - 1), 10000); // 1s, 2s, 4s, 8s, 10s
         console.log(`Reconnect attempt ${currentAttempt}/${maxAttempts} in ${backoffMs}ms`);
-        
+
         reconnectTimeoutRef.current = setTimeout(async () => {
           try {
             const hostPeerId = `gcomms-${sessionCode}-host`;
             const conn = peerRef.current.connect(hostPeerId, { reliable: true });
-            
+
             conn.on('open', () => {
               console.log('Reconnected to host!');
               setConnectionHealth('good');
+              reconnectAttemptsRef.current = 0;
               setReconnectAttempts(0);
-              setupConnection(conn);
+              setupConnectionRef.current(conn);
             });
-            
+
             conn.on('error', (err) => {
               console.log('Reconnect failed:', err);
               attemptReconnect();
             });
-            
+
             // Timeout for this attempt
             setTimeout(() => {
               if (!conn.open) {
@@ -1287,13 +1309,13 @@
                 attemptReconnect();
               }
             }, 5000);
-            
+
           } catch (err) {
             console.log('Reconnect error:', err);
             attemptReconnect();
           }
         }, backoffMs);
-      }, [reconnectAttempts, sessionCode, setupConnection]);
+      }, [sessionCode]);
 
       // Handle being kicked
       useEffect(() => {
@@ -1307,7 +1329,7 @@
       // Heartbeat system for connection health monitoring
       useEffect(() => {
         if (sessionState === 'lobby') return;
-        
+
         // Send heartbeat every 3 seconds
         heartbeatIntervalRef.current = setInterval(() => {
           const now = Date.now();
@@ -1316,11 +1338,12 @@
               connData.conn.send({ type: 'heartbeat', timestamp: now });
             }
           });
-          
+
           // Check for stale connections (no heartbeat in 10 seconds)
           // Only check if we have active connections to check
           const activeConnections = Array.from(connectionsRef.current.keys()).filter(id => id !== peerRef.current?.id);
-          
+          const currentHealth = connectionHealthRef.current;
+
           if (activeConnections.length > 0) {
             let hasStaleConnection = false;
             activeConnections.forEach(peerId => {
@@ -1330,24 +1353,24 @@
                 console.log('Stale connection detected:', peerId);
               }
             });
-            
-            if (hasStaleConnection && connectionHealth === 'good') {
+
+            if (hasStaleConnection && currentHealth === 'good') {
               setConnectionHealth('degraded');
-            } else if (!hasStaleConnection && connectionHealth === 'degraded') {
+            } else if (!hasStaleConnection && currentHealth === 'degraded') {
               setConnectionHealth('good');
             }
-          } else if (connectionHealth === 'degraded') {
+          } else if (currentHealth === 'degraded') {
             // No connections to check, reset to good
             setConnectionHealth('good');
           }
         }, 3000);
-        
+
         return () => {
           if (heartbeatIntervalRef.current) {
             clearInterval(heartbeatIntervalRef.current);
           }
         };
-      }, [sessionState, connectionHealth]);
+      }, [sessionState]);
 
       const syncTeams = (newTeams) => {
         if (isHostRef.current) {
